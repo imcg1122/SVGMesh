@@ -176,21 +176,27 @@ Mask resolution isn't the bottleneck — subdivision depth is.
 
 ## 7. Needs from Ian — current asks
 
-**① Test part mode** (v0.4.0 — check the version in the panel corner). This is the big one:
+**① Print one.** Everything left is preview-versus-reality. A token with a decal on each
+face, at 0.6mm depth, would confirm colour opacity and edge quality in the only way that
+counts.
 
-- Do decals appear as parts under the object in PrusaSlicer, with their own toolhead dropdown?
-- Do smart fill and bucket fill work on them?
-- Is the colour depth now what you set (0.6mm default) rather than too deep?
-- Does the surface stay flush — no bump where the decal sits?
+**② Does the opposite-face copy read the right way round?** It's confirmed working
+mechanically, but I default to flipping the artwork and haven't seen a physical token to
+know whether that's right. If it reads backwards, untick the flip toggle and say so.
 
-**② Test "Copy to opposite face"** on a hexagon token. Does the artwork read correctly from
-the back, or does it need the flip toggle turned off? I guessed at the handedness.
+**③ Pick the next direction** — see §9.
 
-**③ Print one.** Everything from here is preview-versus-reality.
+### Verified ✅
 
-**④ Remaining known gaps:** no scale/rotate handles on the decal itself (sliders and typed
-values only), no copy/paste, no snapping to model features, no cylindrical projection,
-per-decal thickness is set from the global field at placement time rather than edited later.
+- Part mode: decals appear as parts in PrusaSlicer, smart fill and bucket fill work on them
+- Copy to opposite face
+- Paint mode: correct toolhead, watertight mesh, no repair prompt
+
+### Remaining known gaps
+
+No scale/rotate handles on the decal itself (sliders and typed values only), no copy/paste,
+no snapping to model features, no cylindrical projection, per-decal thickness is fixed at
+placement time from the global field rather than editable afterwards.
 
 ### Received ✅
 
@@ -264,7 +270,30 @@ PrusaSlicer's own tool falls over.
 
 ## 11. Changelog
 
-### 2026-08-10 — v0.4.1: "no opposite face found" fixed
+### 2026-08-10 — v0.4.2: part mode confirmed working; stale-build detection
+
+**Part mode verified in PrusaSlicer by Ian: smart fill and bucket fill work on the decals.**
+That was the whole point of the mode, and it closes the loop on his UX review. Copy to
+opposite face also confirmed working.
+
+**Opposite-face detection simplified and made side-independent.** It now casts from
+*outside* the far side inward — which is just `snapToSurface` looking the other way —
+rather than firing outward from inside the mesh. The inside-out ray only worked because
+the material happened to be DoubleSide; the outside-in ray hits a front face on any
+correctly wound mesh and depends on nothing. Verified on the token under both FrontSide
+and DoubleSide, centred and off-centre. The DoubleSide change is kept anyway, since it
+still helps STLs with inconsistent winding.
+
+**Stale-build detection added — this bit us twice.** Both times a fix was already correct
+and deployed, and both times the browser was running an old bundle from a cached
+index.html; each cost a full debugging round trip. The app now compares the script tag it
+actually loaded against the one the server is serving right now, fetched with
+`cache: 'no-store'` so it can't be answered from the same stale cache, and shows a reload
+banner when they differ. Checked on load, on window focus, and every five minutes.
+
+No version file to keep in sync: Vite's content-hashed bundle name already changes on every
+build, so the check maintains itself.
+
 
 "Copy to opposite face" failed on the hexagon token. Cause: **Three.js culls raycast hits
 by `material.side`**, and the model material was `FrontSide`. The ray for this feature

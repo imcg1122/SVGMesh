@@ -29,9 +29,10 @@ import { rasterizeSvg } from './paint/svgMask.ts';
 import { extrudeSvg } from './paint/extrude.ts';
 import { projectorFromHit, stampLayers, type DecalLayer, type Mask } from './paint/stamp.ts';
 import { DecalStore, type Decal } from './app/decals.ts';
+import { watchForNewBuild } from './app/updateCheck.ts';
 
 /** Shown in the panel and written into export filenames. Bump on behaviour changes. */
-export const BUILD = 'v0.4.1';
+export const BUILD = 'v0.4.2';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
@@ -150,24 +151,18 @@ function snapToSurface(target: Vec3, normal: Vec3): { point: Vec3; normal: Vec3 
 /**
  * The far side of the model, straight through from a given surface point.
  *
- * We want the first surface the ray EXITS through, not simply the last thing it
- * hits — on a model with internal structure or anything beyond it, "last hit"
- * lands somewhere unrelated. A face is an exit when its normal points along the
- * ray rather than against it.
+ * Implemented as an OUTSIDE-IN ray: start beyond the far side and come back
+ * toward the model along the flipped normal. The obvious approach — fire a ray
+ * from inside the model outward — is fragile, because it depends on back faces
+ * being hittable, which in turn depends on material.side, geometry winding and
+ * how the raycaster was configured. Approaching from outside hits a front face
+ * on a correctly wound mesh and needs none of that to line up.
+ *
+ * `snapToSurface` already does exactly this, so the whole feature reduces to
+ * "snap to the surface, looking the other way".
  */
 function oppositeFace(point: Vec3, normal: Vec3): { point: Vec3; normal: Vec3 } | null {
-  if (!mesh) return null;
-  const dir = new THREE.Vector3(-normal[0], -normal[1], -normal[2]).normalize();
-  // Start just inside so we don't immediately re-hit the face we started on.
-  const origin = new THREE.Vector3(...point).addScaledVector(dir, 1e-3);
-  raycaster.set(origin, dir);
-
-  const hits = raycaster.intersectObject(mesh, true);
-  const exit = hits.find((h) => h.face && h.face.normal.dot(dir) > 0.1) ?? hits.at(-1);
-  if (!exit?.face) return null;
-
-  const n = exit.face.normal.clone().normalize();
-  return { point: [exit.point.x, exit.point.y, exit.point.z], normal: [n.x, n.y, n.z] };
+  return snapToSurface(point, [-normal[0], -normal[1], -normal[2]]);
 }
 
 function basisOf(d: Decal) {
@@ -856,3 +851,8 @@ $<HTMLButtonElement>('export').addEventListener('click', async () => {
 $<HTMLDivElement>('version').textContent = BUILD;
 renderAssets();
 renderPanel();
+
+$<HTMLButtonElement>('updateReload').onclick = () => location.reload();
+watchForNewBuild(() => {
+  $<HTMLDivElement>('update').hidden = false;
+});
