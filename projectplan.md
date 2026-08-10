@@ -176,19 +176,18 @@ Mask resolution isn't the bottleneck — subdivision depth is.
 
 ## 7. Needs from Ian — current asks
 
-**① Re-test after the manifold fix.** Same procedure: token + cutlery icon on the top face,
-~15mm wide, toolhead 2. Confirm:
+**① Try the new placement UX** (v0.3.0 — check the version in the panel corner).
 
-- **No "open edges" warning and no repair prompt.** This is the fix that matters.
-- The Detail settings now visibly differ (they should: depth 4→7 across the range)
-- The icon still lands on toolhead 2
+- Place several decals, drag them around, undo a few things
+- Two decals on different toolheads, exported together
+- Does the surface-conforming preview match what PrusaSlicer shows?
 
 **② Print one.** Everything from here is preview-versus-reality. A single printed token at
 0.2mm Detail tells us more than any screenshot.
 
-**③ UX friction.** What's missing or annoying? Known gaps: no drag-to-move after placing
-(you re-click), no live paint preview (the quad is an approximation until export), no undo,
-one decal at a time.
+**③ What's still missing?** Remaining known gaps: no scale handles on the decal itself
+(sliders only), no rotate-by-dragging, no copy/paste, no snapping, no cylindrical
+projection yet.
 
 ### Received ✅
 
@@ -261,6 +260,36 @@ PrusaSlicer's own tool falls over.
 ---
 
 ## 11. Changelog
+
+### 2026-08-10 — Phase 2a: placement UX
+
+Ian chose placement UX as the Phase 2 priority, with curved surfaces second ("mix of
+both" — worth having, not urgent).
+
+- **Multiple decals per model.** `stampLayers()` paints any number of decals in one pass.
+  Overlaps resolve last-wins. Doing it in one pass rather than merging per-decal results
+  avoids reconciling two subdivision trees over the same triangle, which is fiddly and
+  lossy — a single classifier consulting layers in order is simpler and exactly right.
+- **Real surface-conforming preview** via Three's `DecalGeometry`, replacing the floating
+  quad. It clips actual geometry to the projector box and hugs the surface, so curvature
+  and silhouette read correctly. Decals are tinted with their toolhead's Prusa colour.
+- **Drag to move.** Grab a decal on the model and it follows the surface, re-deriving its
+  normal as it goes. One undo step per gesture, not per frame.
+- **Undo/redo** with Ctrl+Z / Ctrl+Shift+Z and buttons. History snapshots a small
+  serializable decal array; heavy assets (masks, canvases) live in a separate registry
+  keyed by id, so undo never copies pixels.
+- **Decal list** with selection, per-decal toolhead, and delete. New decals auto-pick an
+  unused toolhead so overlapping decals stay distinguishable.
+- Export refuses when any decal shares the model's toolhead, listing how many.
+- Preview box depth is capped against the model's smallest dimension, so a 2mm token
+  doesn't get a decal projected onto its underside.
+
+`src/app/decals.ts` is deliberately free of Three.js and DOM references so the store and
+its history are unit-testable. 25 new checks; 136 total.
+
+**Note on local tooling:** `node_modules` in the working folder is a Windows install, so
+`vite build` can't run in the Linux sandbox (rollup ships platform-specific native
+binaries). `tsc` and the tests run fine, and CI installs fresh on Linux.
 
 ### 2026-08-10 — Phase 1 complete. Fix verified on hardware-real workflow.
 

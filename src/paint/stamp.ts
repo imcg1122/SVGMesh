@@ -115,12 +115,16 @@ export function worldToUV(p: Vec3, proj: PlanarProjector): [number, number] {
 
 export type Mask = (u: number, v: number) => boolean;
 
-export interface StampOptions {
+/** One decal: where it projects from, what shape it is, which toolhead it uses. */
+export interface DecalLayer {
   projector: PlanarProjector;
   /** Returns true where the SVG is filled. UV outside 0..1 is never queried. */
   mask: Mask;
   /** Extruder to paint with. Must differ from the model's own extruder. */
   state: number;
+}
+
+export interface StampSettings {
   /**
    * Smallest detail worth resolving, in mm. Tree depth is derived per triangle
    * from this. Below ~0.2mm a 0.4mm nozzle cannot render the difference.
@@ -131,6 +135,8 @@ export interface StampOptions {
   /** Skip faces angled more than this away from the projector, in degrees. */
   maxFacingAngleDeg?: number;
 }
+
+export interface StampOptions extends StampSettings, DecalLayer {}
 
 export interface StampResult {
   /** The input triangles, unchanged. Returned for convenience only. */
@@ -181,29 +187,22 @@ export function depthForTriangle(edge: number, targetMm: number, cap: number): n
   return Math.min(cap, Math.ceil(Math.log2(edge / targetMm)));
 }
 
-export function stamp(input: Tri[], opts: StampOptions): StampResult {
-  const { projector, mask, state, targetFeatureMm = 0.2, maxDepth = 7, maxFacingAngleDeg = 80 } = opts;
-
+/**
+ * Paint any number of decals in a single pass.
+ *
+ * Overlapping decals resolve last-wins, matching the layer order in the UI.
+ * Doing them in one pass rather than merging per-decal results avoids having to
+ * reconcile two subdivision trees over the same triangle, which is fiddly and
+ * lossy — a single classifier that consults the layers in order is both simpler
+ * and exactly right.
+ */
+export function stampLayers(
+  input: Tri[],
+  layers: DecalLayer[],
+  settings: StampSettings = {},
+): StampResult {
+  const { targetFeatureMm = 0.2, maxDepth = 7, maxFacingAngleDeg = 80 } = settings;
   const facingLimit = Math.cos((maxFacingAngleDeg * Math.PI) / 180);
-
-  // A triangle is a candidate when it faces the projector and lands in the
-  // footprint. Back-face culling is what stops the decal bleeding through to
-  // the far side of the model.
-  const isCandidate = (t: Tri): boolean =>
-    dot(triNormal(t), projector.direction) < -facingLimit &&
-    touchesFootprint(t[0], t[1], t[2], projector);
-
-  const classify = (p: Vec3): number => {
-    const [u, v] = worldToUV(p, projector);
-    if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
-    return mask(u, v) ? state : 0;
-  };
-
-  // Safe early-out for the recursion: a region entirely outside the decal
-  // rectangle cannot contain paint, so there's no point subdividing it. This is
-  // what keeps the cost proportional to decal area rather than triangle area.
-  const isEmpty = (a: Vec3, b: Vec3, c: Vec3): boolean =>
-    !touchesFootprint(a, b, c, projector);
 
   const segments: string[] = [];
   let painted = 0;
@@ -211,10 +210,35 @@ export function stamp(input: Tri[], opts: StampOptions): StampResult {
   let finest = Infinity;
 
   for (const t of input) {
-    if (!isCandidate(t)) {
+    const n = triNormal(t);
+
+    // Which decals could touch this triangle? Back-face culling here is what
+    // stops a decal bleeding through to the far side of the model.
+    const active = layers.filter(
+      (l) =>
+        dot(n, l.projector.direction) < -facingLimit &&
+        touchesFootprint(t[0], t[1], t[2], l.projector),
+    );
+
+    if (active.length === 0) {
       segments.push('');
       continue;
     }
+
+    const classify = (p: Vec3): number => {
+      for (let i = active.length - 1; i >= 0; i--) {
+        const l = active[i];
+        const [u, v] = worldToUV(p, l.projector);
+        if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+        if (l.mask(u, v)) return l.state;
+      }
+      return 0;
+    };
+
+    // Safe early-out: a region outside every active decal's rectangle cannot
+    // contain paint. This keeps cost proportional to decal area, not mesh size.
+    const isEmpty = (a: Vec3, b: Vec3, c: Vec3): boolean =>
+      !active.some((l) => touchesFootprint(a, b, c, l.projector));
 
     const edge = maxEdge(t);
     const depth = depthForTriangle(edge, targetFeatureMm, maxDepth);
@@ -239,4 +263,10 @@ export function stamp(input: Tri[], opts: StampOptions): StampResult {
       effectiveResolutionMm: Number.isFinite(finest) ? finest : 0,
     },
   };
+}
+
+/** Single-decal convenience wrapper. */
+export function stamp(input: Tri[], opts: StampOptions): StampResult {
+  const { projector, mask, state, ...settings } = opts;
+  return stampLayers(input, [{ projector, mask, state }], settings);
 }

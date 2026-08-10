@@ -10,7 +10,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types src/mmu/codec.test.ts && node --experimental-strip-types src/paint/stamp.test.ts"
+    "test": "node --experimental-strip-types src/mmu/codec.test.ts && node --experimental-strip-types src/paint/stamp.test.ts && node --experimental-strip-types src/app/decals.test.ts"
   },
   "dependencies": {
     "fflate": "^0.8.2",

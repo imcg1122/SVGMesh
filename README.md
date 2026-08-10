@@ -80,9 +80,13 @@ dependency).
 
 1. Load an STL
 2. Load an SVG — use one with a transparent background; a white background becomes a painted region
-3. Click the model where you want the decal
-4. Set width, rotation, and which toolhead the decal prints with
-5. Export, then open the 3MF in PrusaSlicer
+3. Click the model where you want it. The decal conforms to the surface as you place it
+4. **Drag it** on the model to reposition; adjust width, rotation and toolhead in the panel
+5. Add more SVGs and place as many decals as you like — each gets its own toolhead
+6. Export, then open the 3MF in PrusaSlicer
+
+Ctrl+Z / Ctrl+Shift+Z undo and redo. Delete removes the selected decal. Overlapping decals
+resolve last-wins, matching the order in the list.
 
 ### Two things that will confuse you if nobody warns you
 
@@ -118,13 +122,17 @@ fixtures. If a future PrusaSlicer changes the format, the tests fail immediately
 
 ```
 src/mmu/codec.ts       encode/decode, tree utilities, subdivision
-src/paint/stamp.ts     projector, footprint query, adaptive subdivision
+src/paint/stamp.ts     projector, footprint query, multi-decal painting
 src/paint/svgMask.ts   SVG rasterization and sampling
+src/app/decals.ts      decal model and undo history (no Three.js, no DOM)
 src/io/stl.ts          STL reader (binary + ASCII)
 src/io/threemf.ts      3MF writer
-src/main.ts            app
+src/main.ts            viewport, interaction, panel
 phase0/                Python validation scripts and 3MF generators
 ```
+
+The engine is deliberately separable from the app: `codec`, `stamp` and `decals` have no
+Three.js or DOM dependencies, which is why they're covered by 136 headless tests.
 
 `phase0/` holds the standalone Python tools used to reverse-engineer and verify the format.
 They're stdlib-only — `python3 phase0/test_codec.py` and `python3 phase0/make_toolhead_probe.py`
@@ -133,7 +141,7 @@ still work and remain useful for generating diagnostic files.
 ## Roadmap
 
 - Cylindrical and conformal projection for curved surfaces
-- Multiple live, re-editable decals per model
+- Scale and rotate handles on the decal itself, not just sliders
 - Text tool
 - Basic modeling: primitives, booleans
 - Offline PWA

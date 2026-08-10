@@ -1,62 +1,59 @@
 /**
- * SVGMesh MVP.
+ * SVGMesh.
  *
- * Load an STL, load an SVG, click the model to place the decal, export a 3MF
- * with the decal already assigned to a toolhead.
+ * Load an STL, load one or more SVGs, click to place decals, drag to move them,
+ * export a 3MF with each decal on its own toolhead.
  *
- * Placement preview is a textured quad floating just above the surface — that
- * gives instant feedback while dragging sliders. The real projection and paint
- * encoding only runs on export, which keeps interaction responsive on meshes
- * where a full re-stamp would take seconds.
+ * Preview uses Three's DecalGeometry, which clips real geometry to the
+ * projector box and hugs the surface. That's a far more honest preview than a
+ * floating quad — it shows curvature and silhouette the way the export will see
+ * them. It is still an approximation: the export culls by face angle where
+ * DecalGeometry clips by box, and the exported paint is quantized to the
+ * subdivision tree. Both differences land below print resolution.
  */
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
 
-import type { Tri, Vec3 } from './mmu/codec.ts';
+import type { Tri } from './mmu/codec.ts';
 import { boundingBox, parseSTL, trisToPositions } from './io/stl.ts';
 import { build3mf, downloadBlob } from './io/threemf.ts';
-import { rasterizeSvg, type SvgMask } from './paint/svgMask.ts';
-import { projectorFromHit, stamp } from './paint/stamp.ts';
+import { rasterizeSvg } from './paint/svgMask.ts';
+import { projectorFromHit, stampLayers, type DecalLayer } from './paint/stamp.ts';
+import { DecalStore, type Decal } from './app/decals.ts';
 
-// Accelerated raycasting — essential once meshes get into six figures.
-// three-mesh-bvh monkey-patches these onto Three's prototypes at runtime, which
-// TypeScript can't model without a module augmentation that may or may not
-// duplicate the library's own. Casting keeps this working across versions.
+/**
+ * Bump whenever behaviour changes. Shown in the panel and written into export
+ * filenames — a stale cached page cost us a debugging round trip once already.
+ */
+export const BUILD = 'v0.3.0';
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
+// three-mesh-bvh patches these onto Three's prototypes at runtime.
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
 (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
 (THREE.Mesh.prototype as any).raycast = acceleratedRaycast;
 
 // --- state -----------------------------------------------------------------
 
+const store = new DecalStore();
+const textures = new Map<string, THREE.Texture>();
+const decalMeshes = new Map<string, THREE.Mesh>();
+
 let tris: Tri[] = [];
 let mesh: THREE.Mesh | null = null;
-let svg: SvgMask | null = null;
-let svgText = '';
+let modelMinDim = 10;
 let stlName = 'model';
-
-let hitPoint: Vec3 | null = null;
-let hitNormal: Vec3 | null = null;
-
-/**
- * Bump this whenever behaviour changes. It's shown in the panel and stamped
- * into exported filenames, so "which build produced this file?" is never a
- * guess — a stale cached page cost us a debugging round trip once already.
- */
-export const BUILD = 'v0.2.0 mesh-preserving';
+let pendingAssetId: string | null = null;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $<HTMLDivElement>('status');
 const hintEl = $<HTMLDivElement>('hint');
-const exportBtn = $<HTMLButtonElement>('export');
-
-const say = (msg: string) => {
-  statusEl.textContent = msg;
+const say = (m: string) => {
+  statusEl.textContent = m;
 };
-
-$<HTMLDivElement>('version').textContent = BUILD;
 
 // --- scene -----------------------------------------------------------------
 
@@ -65,8 +62,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1b1f24);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
-camera.position.set(60, -80, 60);
 camera.up.set(0, 0, 1);
+camera.position.set(60, -80, 60);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -76,30 +73,22 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-const key = new THREE.DirectionalLight(0xffffff, 1.6);
+const key = new THREE.DirectionalLight(0xffffff, 1.5);
 key.position.set(1, -1, 2);
 scene.add(key);
+const rim = new THREE.DirectionalLight(0xffffff, 0.4);
+rim.position.set(-1, 1, -0.5);
+scene.add(rim);
+
 const grid = new THREE.GridHelper(400, 40, 0x3a424c, 0x2a3038);
 grid.rotation.x = Math.PI / 2;
 scene.add(grid);
 
-const modelMat = new THREE.MeshStandardMaterial({
-  color: 0xff8000,
-  roughness: 0.75,
-  metalness: 0.0,
-  flatShading: false,
-});
+const modelMat = new THREE.MeshStandardMaterial({ color: 0xff8000, roughness: 0.75 });
 
-// Preview quad for the decal.
-const decalMat = new THREE.MeshBasicMaterial({
-  transparent: true,
-  depthTest: false,
-  side: THREE.DoubleSide,
-});
-const decal = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), decalMat);
-decal.visible = false;
-decal.renderOrder = 2;
-scene.add(decal);
+/** Toolhead swatches, matching Prusa's default extruder colours. */
+const TOOL_COLOURS = ['#ff8000', '#db5182', '#3ec0ff', '#ff4f4f', '#fbeb7d'];
+const toolColour = (n: number) => TOOL_COLOURS[(n - 1) % TOOL_COLOURS.length];
 
 function resize(): void {
   const w = view.clientWidth;
@@ -117,7 +106,141 @@ resize();
   renderer.render(scene, camera);
 })();
 
-// --- model loading ---------------------------------------------------------
+// --- decal rendering -------------------------------------------------------
+
+/**
+ * How deep the decal projector box cuts into the model. Too shallow and a decal
+ * on a curved surface gets clipped; too deep and it punches through to the far
+ * side of a thin part. Capping against the model's smallest dimension keeps a
+ * 2mm token from getting a decal on its underside.
+ */
+function decalDepth(widthMm: number): number {
+  return Math.max(0.6, Math.min(widthMm * 0.35, modelMinDim * 0.9));
+}
+
+function orientationFor(d: Decal): THREE.Euler {
+  const p = projectorFromHit(d.point, d.normal, d.widthMm, d.widthMm, (d.rollDeg * Math.PI) / 180);
+  const m = new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(...p.right),
+    new THREE.Vector3(...p.up),
+    new THREE.Vector3(-p.direction[0], -p.direction[1], -p.direction[2]),
+  );
+  return new THREE.Euler().setFromRotationMatrix(m);
+}
+
+function heightOf(d: Decal): number {
+  return d.widthMm / (store.assetFor(d)?.aspect ?? 1);
+}
+
+function rebuildDecal(d: Decal): void {
+  if (!mesh) return;
+  const old = decalMeshes.get(d.id);
+  if (old) {
+    scene.remove(old);
+    old.geometry.dispose();
+    (old.material as THREE.Material).dispose();
+  }
+
+  const h = heightOf(d);
+  const geom = new DecalGeometry(
+    mesh,
+    new THREE.Vector3(...d.point),
+    orientationFor(d),
+    new THREE.Vector3(d.widthMm, h, decalDepth(Math.max(d.widthMm, h))),
+  );
+
+  const selected = store.selectedId === d.id;
+  const mat = new THREE.MeshStandardMaterial({
+    map: textures.get(d.assetId) ?? null,
+    color: new THREE.Color(toolColour(d.state)),
+    transparent: true,
+    alphaTest: 0.5, // hard edge, matching how the paint actually resolves
+    roughness: 0.7,
+    polygonOffset: true,
+    polygonOffsetFactor: -4,
+    emissive: new THREE.Color(selected ? 0x333333 : 0x000000),
+  });
+
+  const m = new THREE.Mesh(geom, mat);
+  m.userData.decalId = d.id;
+  m.renderOrder = 1;
+  scene.add(m);
+  decalMeshes.set(d.id, m);
+}
+
+function rebuildAll(): void {
+  for (const [id, m] of decalMeshes) {
+    if (!store.decals.some((d) => d.id === id)) {
+      scene.remove(m);
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+      decalMeshes.delete(id);
+    }
+  }
+  for (const d of store.decals) rebuildDecal(d);
+  renderPanel();
+}
+
+// --- panel -----------------------------------------------------------------
+
+function renderPanel(): void {
+  const list = $<HTMLDivElement>('decalList');
+  list.innerHTML = '';
+
+  if (store.decals.length === 0) {
+    list.innerHTML = '<div class="empty">No decals yet.</div>';
+  }
+
+  store.decals.forEach((d, i) => {
+    const row = document.createElement('div');
+    row.className = 'row' + (d.id === store.selectedId ? ' sel' : '');
+
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = toolColour(d.state);
+
+    const label = document.createElement('span');
+    label.className = 'rowName';
+    label.textContent = `${i + 1}. ${store.assetFor(d)?.name ?? 'decal'}`;
+
+    const tool = document.createElement('span');
+    tool.className = 'rowTool';
+    tool.textContent = `T${d.state}`;
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '×';
+    del.title = 'Delete';
+    del.onclick = (e) => {
+      e.stopPropagation();
+      store.remove(d.id);
+      rebuildAll();
+    };
+
+    row.append(swatch, label, tool, del);
+    row.onclick = () => {
+      store.selectedId = d.id;
+      rebuildAll();
+    };
+    list.append(row);
+  });
+
+  const sel = store.selected;
+  $<HTMLDivElement>('props').style.display = sel ? 'block' : 'none';
+  if (sel) {
+    $<HTMLInputElement>('size').value = String(sel.widthMm);
+    $<HTMLInputElement>('rot').value = String(sel.rollDeg);
+    $<HTMLSelectElement>('extruder').value = String(sel.state);
+    $<HTMLSpanElement>('sizeVal').textContent = `${sel.widthMm.toFixed(1)} mm`;
+    $<HTMLSpanElement>('rotVal').textContent = `${sel.rollDeg}°`;
+  }
+
+  $<HTMLButtonElement>('export').disabled = !mesh || store.decals.length === 0;
+  $<HTMLButtonElement>('undo').disabled = !store.canUndo;
+  $<HTMLButtonElement>('redo').disabled = !store.canRedo;
+}
+
+// --- loading ---------------------------------------------------------------
 
 $<HTMLInputElement>('stl').addEventListener('change', async (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
@@ -140,29 +263,29 @@ $<HTMLInputElement>('stl').addEventListener('change', async (e) => {
     scene.remove(mesh);
     mesh.geometry.dispose();
   }
-
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(trisToPositions(tris), 3));
   geom.computeVertexNormals();
   (geom as any).computeBoundsTree();
-
   mesh = new THREE.Mesh(geom, modelMat);
   scene.add(mesh);
 
   frameModel();
-  decal.visible = false;
-  hitPoint = null;
-  hintEl.textContent = 'Click the model to place the decal';
-  say(`Loaded ${stlName} — ${tris.length.toLocaleString()} triangles.\nClick the model to place the decal.`);
-  refreshExport();
+  rebuildAll();
+  hintEl.textContent = pendingAssetId
+    ? 'Click the model to place a decal'
+    : 'Now load an SVG';
+  say(`Loaded ${stlName} — ${tris.length.toLocaleString()} triangles.`);
 });
 
 function frameModel(): void {
   const { min, max } = boundingBox(tris);
+  const dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+  modelMinDim = Math.max(0.5, Math.min(...dims));
   const c = new THREE.Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
-  const span = Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2]) || 10;
+  const span = Math.max(...dims) || 10;
   controls.target.copy(c);
-  camera.position.set(c.x + span * 1.2, c.y - span * 1.6, c.z + span * 1.2);
+  camera.position.set(c.x + span * 1.1, c.y - span * 1.5, c.z + span * 1.1);
   camera.near = span / 500;
   camera.far = span * 100;
   camera.updateProjectionMatrix();
@@ -170,144 +293,199 @@ function frameModel(): void {
   grid.position.set(c.x, c.y, min[2]);
 }
 
-// --- SVG loading -----------------------------------------------------------
-
 $<HTMLInputElement>('svg').addEventListener('change', async (e) => {
-  const file = (e.target as HTMLInputElement).files?.[0];
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
   if (!file) return;
-  svgText = await file.text();
+  const svgText = await file.text();
+
   try {
-    svg = await rasterizeSvg(svgText);
+    const { mask, aspect, preview } = await rasterizeSvg(svgText);
+    const asset = store.addAsset({ name: file.name, svgText, mask, aspect });
+    const tex = new THREE.CanvasTexture(preview);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    textures.set(asset.id, tex);
+    pendingAssetId = asset.id;
+    hintEl.textContent = 'Click the model to place this decal';
+    say(`Loaded ${file.name}. Click the model to place it.`);
   } catch (err) {
     say(`Could not rasterize that SVG.\n${(err as Error).message}`);
-    return;
   }
-
-  const tex = new THREE.CanvasTexture(svg.preview);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  decalMat.map = tex;
-  decalMat.needsUpdate = true;
-
-  say(`Loaded ${file.name} (aspect ${svg.aspect.toFixed(2)}).`);
-  updateDecal();
-  refreshExport();
+  input.value = ''; // allow re-loading the same file
 });
 
-// --- placement -------------------------------------------------------------
+// --- pointer interaction ---------------------------------------------------
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let dragged = false;
+let dragId: string | null = null;
+let moved = false;
 
-renderer.domElement.addEventListener('pointerdown', () => {
-  dragged = false;
-});
-renderer.domElement.addEventListener('pointermove', () => {
-  dragged = true;
-});
-renderer.domElement.addEventListener('pointerup', (ev) => {
-  if (dragged || !mesh) return;
+function pick(ev: PointerEvent): THREE.Intersection | null {
+  if (!mesh) return null;
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((ev.clientX - r.left) / r.width) * 2 - 1;
+  pointer.y = -((ev.clientY - r.top) / r.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  return raycaster.intersectObject(mesh, true)[0] ?? null;
+}
 
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+renderer.domElement.addEventListener('pointerdown', (ev) => {
+  moved = false;
+  if (!mesh) return;
+
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((ev.clientX - r.left) / r.width) * 2 - 1;
+  pointer.y = -((ev.clientY - r.top) / r.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
 
-  const hit = raycaster.intersectObject(mesh, true)[0];
-  if (!hit || !hit.face) return;
-
-  hitPoint = [hit.point.x, hit.point.y, hit.point.z];
-  const n = hit.face.normal.clone().normalize();
-  hitNormal = [n.x, n.y, n.z];
-  updateDecal();
-  refreshExport();
-  say(
-    `Placed at ${hitPoint.map((v) => v.toFixed(1)).join(', ')}.\n` +
-      'Adjust size and rotation, then export.',
-  );
+  const hitDecal = raycaster.intersectObjects([...decalMeshes.values()], false)[0];
+  if (hitDecal) {
+    const id = hitDecal.object.userData.decalId as string;
+    store.selectedId = id;
+    dragId = id;
+    store.beginGesture(); // one undo step for the whole drag
+    controls.enabled = false;
+    rebuildAll();
+  }
 });
 
-function decalSize(): { w: number; h: number } {
-  const w = parseFloat($<HTMLInputElement>('size').value);
-  return { w, h: w / (svg?.aspect ?? 1) };
-}
+renderer.domElement.addEventListener('pointermove', (ev) => {
+  moved = true;
+  if (!dragId) return;
+  const hit = pick(ev);
+  if (!hit?.face) return;
+  const n = hit.face.normal.clone().normalize();
+  store.update(
+    dragId,
+    { point: [hit.point.x, hit.point.y, hit.point.z], normal: [n.x, n.y, n.z] },
+    true,
+  );
+  const d = store.decals.find((x) => x.id === dragId);
+  if (d) rebuildDecal(d);
+});
 
-function updateDecal(): void {
-  if (!hitPoint || !hitNormal || !svg) {
-    decal.visible = false;
+addEventListener('pointerup', (ev) => {
+  if (dragId) {
+    dragId = null;
+    controls.enabled = true;
+    renderPanel();
     return;
   }
-  const { w, h } = decalSize();
-  const roll = (parseFloat($<HTMLInputElement>('rot').value) * Math.PI) / 180;
-  const proj = projectorFromHit(hitPoint, hitNormal, w, h, roll);
+  if (moved || !mesh || !pendingAssetId) return;
 
-  const basis = new THREE.Matrix4().makeBasis(
-    new THREE.Vector3(...proj.right),
-    new THREE.Vector3(...proj.up),
-    new THREE.Vector3(-proj.direction[0], -proj.direction[1], -proj.direction[2]),
-  );
+  const hit = pick(ev as PointerEvent);
+  if (!hit?.face) return;
+  const n = hit.face.normal.clone().normalize();
+  const asset = store.assets.get(pendingAssetId)!;
+  const span = Math.max(modelMinDim, 10);
 
-  decal.geometry.dispose();
-  decal.geometry = new THREE.PlaneGeometry(w, h);
-  decal.quaternion.setFromRotationMatrix(basis);
-  // Float slightly proud of the surface so it doesn't z-fight.
-  const lift = Math.max(w, h) * 0.004;
-  decal.position.set(
-    hitPoint[0] - proj.direction[0] * lift,
-    hitPoint[1] - proj.direction[1] * lift,
-    hitPoint[2] - proj.direction[2] * lift,
-  );
-  decal.visible = true;
+  store.add({
+    assetId: asset.id,
+    point: [hit.point.x, hit.point.y, hit.point.z],
+    normal: [n.x, n.y, n.z],
+    widthMm: Math.min(20, span * 4),
+    rollDeg: 0,
+    state: nextFreeToolhead(),
+  });
+  rebuildAll();
+  say('Placed. Drag it to move, or adjust size and rotation below.');
+});
+
+/** Prefer a toolhead not already in use, so overlapping decals stay distinct. */
+function nextFreeToolhead(): number {
+  const base = parseInt($<HTMLSelectElement>('base').value, 10);
+  const used = new Set(store.decals.map((d) => d.state));
+  for (let t = 2; t <= 5; t++) if (t !== base && !used.has(t)) return t;
+  return base === 2 ? 3 : 2;
 }
 
-for (const id of ['size', 'rot']) {
-  $<HTMLInputElement>(id).addEventListener('input', () => {
-    $<HTMLSpanElement>('sizeVal').textContent = `${parseFloat($<HTMLInputElement>('size').value).toFixed(1)} mm`;
-    $<HTMLSpanElement>('rotVal').textContent = `${$<HTMLInputElement>('rot').value}°`;
-    updateDecal();
+// --- property controls -----------------------------------------------------
+
+function bindSlider(id: string, apply: (d: Decal, value: number) => Partial<Decal>): void {
+  const el = $<HTMLInputElement>(id);
+  el.addEventListener('pointerdown', () => store.beginGesture());
+  el.addEventListener('input', () => {
+    const d = store.selected;
+    if (!d) return;
+    store.update(d.id, apply(d, parseFloat(el.value)), true);
+    rebuildDecal(d);
+    renderPanel();
   });
 }
+bindSlider('size', (_d, v) => ({ widthMm: v }));
+bindSlider('rot', (_d, v) => ({ rollDeg: v }));
 
-function refreshExport(): void {
-  exportBtn.disabled = !(mesh && svg && hitPoint);
-}
+$<HTMLSelectElement>('extruder').addEventListener('change', (e) => {
+  const d = store.selected;
+  if (!d) return;
+  store.update(d.id, { state: parseInt((e.target as HTMLSelectElement).value, 10) });
+  rebuildAll();
+});
+
+$<HTMLButtonElement>('undo').onclick = () => {
+  if (store.undo()) rebuildAll();
+};
+$<HTMLButtonElement>('redo').onclick = () => {
+  if (store.redo()) rebuildAll();
+};
+
+addEventListener('keydown', (e) => {
+  const typing = (e.target as HTMLElement)?.tagName === 'INPUT';
+  if (typing) return;
+
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    const done = e.shiftKey ? store.redo() : store.undo();
+    if (done) rebuildAll();
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && store.selectedId) {
+    e.preventDefault();
+    store.remove(store.selectedId);
+    rebuildAll();
+  }
+});
 
 // --- export ----------------------------------------------------------------
 
-exportBtn.addEventListener('click', async () => {
-  if (!svg || !hitPoint || !hitNormal) return;
+$<HTMLButtonElement>('export').addEventListener('click', async () => {
+  if (!mesh || store.decals.length === 0) return;
 
   const targetFeatureMm = parseFloat($<HTMLSelectElement>('quality').value);
-  const state = parseInt($<HTMLSelectElement>('extruder').value, 10);
   const base = parseInt($<HTMLSelectElement>('base').value, 10);
 
-  if (state === base) {
-    say('The decal and the model are on the same toolhead, so the decal will be invisible.\nPick a different toolhead for one of them.');
+  const clashing = store.decals.filter((d) => d.state === base);
+  if (clashing.length > 0) {
+    say(
+      `${clashing.length} decal(s) use toolhead ${base}, the same as the model.\n` +
+        'Paint that matches the model’s own toolhead is invisible — give them a different one.',
+    );
     return;
   }
 
-  exportBtn.disabled = true;
+  const btn = $<HTMLButtonElement>('export');
+  btn.disabled = true;
   say('Projecting…');
-  await new Promise((r) => setTimeout(r, 16)); // let the UI paint before we block
+  await new Promise((r) => setTimeout(r, 16)); // let the UI paint before blocking
 
   try {
-    const { w, h } = decalSize();
-    const roll = (parseFloat($<HTMLInputElement>('rot').value) * Math.PI) / 180;
     const t0 = performance.now();
-
-    const result = stamp(tris, {
-      projector: projectorFromHit(hitPoint, hitNormal, w, h, roll),
-      mask: svg.mask,
-      state,
-      targetFeatureMm,
+    const layers: DecalLayer[] = store.decals.map((d) => {
+      const asset = store.assetFor(d)!;
+      const h = heightOf(d);
+      return {
+        projector: projectorFromHit(d.point, d.normal, d.widthMm, h, (d.rollDeg * Math.PI) / 180),
+        mask: asset.mask,
+        state: d.state,
+      };
     });
+
+    const result = stampLayers(tris, layers, { targetFeatureMm });
 
     if (result.stats.paintedTriangles === 0) {
       say(
-        'Nothing was painted.\nThe decal may be off the edge of the model, on a face angled away ' +
-          'from the camera, or too small for the current detail setting.',
+        'Nothing was painted.\nThe decals may be off the edge of the model, on faces angled ' +
+          'away from where you placed them, or too small for the current detail setting.',
       );
-      exportBtn.disabled = false;
       return;
     }
 
@@ -317,23 +495,28 @@ exportBtn.addEventListener('click', async () => {
       baseExtruder: base,
       objectName: stlName,
     });
-    // Detail and a timestamp in the filename so successive exports never
-    // overwrite or get confused with each other.
-    const stampId = new Date().toISOString().slice(11, 19).replace(/:/g, '');
-    downloadBlob(data, `${stlName}-th${state}-${targetFeatureMm}mm-${stampId}.3mf`);
 
-    const ms = Math.round(performance.now() - t0);
+    const stampId = new Date().toISOString().slice(11, 19).replace(/:/g, '');
+    downloadBlob(data, `${stlName}-${store.decals.length}decal-${targetFeatureMm}mm-${stampId}.3mf`);
+
     const s = result.stats;
+    const tools = [...new Set(store.decals.map((d) => d.state))].sort().join(', ');
     say(
-      `Exported in ${ms} ms  ·  ${BUILD}\n` +
-        `${s.paintedTriangles.toLocaleString()} of ${s.triangles.toLocaleString()} triangles painted ` +
-        `on toolhead ${state}\n` +
-        `Resolved to ${s.effectiveResolutionMm.toFixed(3)} mm (tree depth ${s.maxTreeDepth})\n` +
-        `${(data.length / 1024).toFixed(0)} KB — mesh unchanged, no repair needed`,
+      `Exported in ${Math.round(performance.now() - t0)} ms  ·  ${BUILD}\n` +
+        `${store.decals.length} decal(s) on toolhead ${tools}\n` +
+        `${s.paintedTriangles.toLocaleString()} of ${s.triangles.toLocaleString()} triangles painted\n` +
+        `Resolved to ${s.effectiveResolutionMm.toFixed(3)} mm · ${(data.length / 1024).toFixed(0)} KB\n` +
+        'Mesh unchanged — no repair needed.',
     );
   } catch (err) {
     say(`Export failed.\n${(err as Error).message}`);
   } finally {
-    exportBtn.disabled = false;
+    btn.disabled = false;
+    renderPanel();
   }
 });
+
+// --- init ------------------------------------------------------------------
+
+$<HTMLDivElement>('version').textContent = BUILD;
+renderPanel();

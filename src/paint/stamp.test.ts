@@ -12,7 +12,14 @@
 
 import { decode, usedStates } from '../mmu/codec.ts';
 import type { Tri, Vec3 } from '../mmu/codec.ts';
-import { depthForTriangle, projectorFromHit, stamp, triNormal, worldToUV } from './stamp.ts';
+import {
+  depthForTriangle,
+  projectorFromHit,
+  stamp,
+  stampLayers,
+  triNormal,
+  worldToUV,
+} from './stamp.ts';
 
 let failures = 0;
 let checks = 0;
@@ -171,6 +178,40 @@ section('a hairline stroke through the middle survives');
   const states = new Set<number>();
   res.segments.forEach((s) => s && usedStates(decode(s), states));
   ok('hairline is resolved', states.has(3), `states=${[...states]}`);
+}
+
+section('multiple decals in one pass');
+{
+  const left = projectorFromHit([12, 20, 10], up, 8, 8);
+  const right = projectorFromHit([28, 20, 10], up, 8, 8);
+  const res = stampLayers(
+    plate(),
+    [
+      { projector: left, mask: everywhere, state: 2 },
+      { projector: right, mask: everywhere, state: 4 },
+    ],
+    { targetFeatureMm: 0.3 },
+  );
+  const states = new Set<number>();
+  res.segments.forEach((s) => s && usedStates(decode(s), states));
+  check('both decals present with their own toolheads', [...states].sort(), [0, 2, 4]);
+  check('geometry untouched', res.stats.triangles, 4);
+}
+
+section('overlapping decals resolve last-wins');
+{
+  const p = projectorFromHit(centre, up, 10, 10);
+  const res = stampLayers(
+    plate(),
+    [
+      { projector: p, mask: everywhere, state: 2 },
+      { projector: p, mask: everywhere, state: 5 },
+    ],
+    { targetFeatureMm: 0.5 },
+  );
+  const states = new Set<number>();
+  res.segments.forEach((s) => s && usedStates(decode(s), states));
+  ok('the later decal wins', states.has(5) && !states.has(2), `states=${[...states]}`);
 }
 
 section('back faces are not painted');
