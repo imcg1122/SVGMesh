@@ -21,9 +21,13 @@ import { rasterizeSvg, type SvgMask } from './paint/svgMask.ts';
 import { projectorFromHit, stamp } from './paint/stamp.ts';
 
 // Accelerated raycasting — essential once meshes get into six figures.
-THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
-THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
-THREE.Mesh.prototype.raycast = acceleratedRaycast;
+// three-mesh-bvh monkey-patches these onto Three's prototypes at runtime, which
+// TypeScript can't model without a module augmentation that may or may not
+// duplicate the library's own. Casting keeps this working across versions.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+(THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
+(THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
+(THREE.Mesh.prototype as any).raycast = acceleratedRaycast;
 
 // --- state -----------------------------------------------------------------
 
@@ -131,7 +135,7 @@ $<HTMLInputElement>('stl').addEventListener('change', async (e) => {
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(trisToPositions(tris), 3));
   geom.computeVertexNormals();
-  geom.computeBoundsTree();
+  (geom as any).computeBoundsTree();
 
   mesh = new THREE.Mesh(geom, modelMat);
   scene.add(mesh);
