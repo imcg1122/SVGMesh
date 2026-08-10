@@ -26,13 +26,14 @@ import type { Tri, Vec3 } from './mmu/codec.ts';
 import { boundingBox, parseSTL, trisToPositions } from './io/stl.ts';
 import { build3mf, downloadBlob, type Volume } from './io/threemf.ts';
 import { rasterizeSvg } from './paint/svgMask.ts';
-import { extrudeSvg } from './paint/extrude.ts';
+import { extrudeShapes, parseSvgShapes, polygonsToShapes } from './paint/extrude.ts';
+import { FONT_FAMILIES, renderText } from './app/text.ts';
 import { projectorFromHit, stampLayers, type DecalLayer, type Mask } from './paint/stamp.ts';
 import { DecalStore, type Decal } from './app/decals.ts';
 import { watchForNewBuild } from './app/updateCheck.ts';
 
 /** Shown in the panel and written into export filenames. Bump on behaviour changes. */
-export const BUILD = 'v0.4.2';
+export const BUILD = 'v0.5.0';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
@@ -42,7 +43,6 @@ export const BUILD = 'v0.4.2';
 // --- state -----------------------------------------------------------------
 
 const store = new DecalStore();
-const svgTexts = new Map<string, string>();
 const thumbs = new Map<string, string>();
 const silhouettes = new Map<string, HTMLCanvasElement>();
 const textures = new Map<string, THREE.Texture>();
@@ -281,7 +281,6 @@ function renderAssets(): void {
       if (activeAssetId === asset.id) activeAssetId = null;
       thumbs.delete(asset.id);
       silhouettes.delete(asset.id);
-      svgTexts.delete(asset.id);
       rebuildAll();
       renderAssets();
       say(n > 0 ? `Removed ${asset.name} and ${n} decal(s) using it.` : `Removed ${asset.name}.`);
@@ -452,7 +451,6 @@ $<HTMLInputElement>('svg').addEventListener('change', async (e) => {
     try {
       const { mask, aspect, preview, silhouette } = await rasterizeSvg(svgText);
       const asset = store.addAsset({ name: file.name, svgText, mask, aspect });
-      svgTexts.set(asset.id, svgText);
       silhouettes.set(asset.id, silhouette);
       thumbs.set(asset.id, preview.toDataURL());
       activeAssetId = asset.id;
@@ -468,6 +466,48 @@ $<HTMLInputElement>('svg').addEventListener('change', async (e) => {
     say(`Added ${added} SVG${added > 1 ? 's' : ''}. Click the model to place one.`);
   }
 });
+
+// --- text ------------------------------------------------------------------
+
+const fontSel = $<HTMLSelectElement>('fontFamily');
+for (const f of FONT_FAMILIES) {
+  const o = document.createElement('option');
+  o.value = f;
+  o.textContent = f;
+  o.style.fontFamily = f;
+  fontSel.append(o);
+}
+fontSel.value = 'Arial';
+
+$<HTMLButtonElement>('addText').onclick = () => {
+  const text = $<HTMLTextAreaElement>('textInput').value.trim();
+  if (!text) {
+    say('Type something first.');
+    return;
+  }
+  try {
+    const r = renderText({
+      text,
+      fontFamily: fontSel.value,
+      bold: $<HTMLInputElement>('fontBold').checked,
+    });
+    const name = text.replace(/\s+/g, ' ').slice(0, 24);
+    const asset = store.addAsset({
+      name,
+      mask: r.mask,
+      aspect: r.aspect,
+      polygons: r.polygons,
+    });
+    silhouettes.set(asset.id, r.silhouette);
+    thumbs.set(asset.id, r.preview.toDataURL());
+    activeAssetId = asset.id;
+    renderAssets();
+    hintEl.textContent = mesh ? 'Click the model to place this text' : 'Now load an STL';
+    say(`Added “${name}”. Click the model to place it.`);
+  } catch (err) {
+    say(`Could not render that text.\n${(err as Error).message}`);
+  }
+};
 
 // --- placing and dragging --------------------------------------------------
 
@@ -767,9 +807,18 @@ $<HTMLButtonElement>('export').addEventListener('click', async () => {
       volumes = [{ name: stlName, tris, extruder: base }];
       let skipped = 0;
       for (const [i, d] of store.decals.entries()) {
-        const svgText = svgTexts.get(d.assetId);
-        if (!svgText) continue;
-        const prism = extrudeSvg(svgText, {
+        const asset = store.assetFor(d);
+        if (!asset) continue;
+
+        // Prefer the SVG's own paths — exact curves beat a traced raster. Fall
+        // back to traced outlines for text, and for stroke-only SVGs that
+        // legitimately contain no fillable shapes.
+        let shapes = asset.svgText ? parseSvgShapes(asset.svgText) : [];
+        if (shapes.length === 0 && asset.polygons) {
+          shapes = polygonsToShapes(asset.polygons, asset.aspect);
+        }
+
+        const prism = extrudeShapes(shapes, {
           point: d.point,
           normal: d.normal,
           widthMm: d.widthMm,

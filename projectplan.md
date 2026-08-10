@@ -270,6 +270,40 @@ PrusaSlicer's own tool falls over.
 
 ## 11. Changelog
 
+### 2026-08-10 — v0.5.0: text tool (Phase 3)
+
+Ian chose the text tool for Phase 3.
+
+**The hard part was part mode.** Paint mode only ever asks "is this point inside the
+artwork?", which a rendered canvas answers directly. Part mode needs real geometry, and
+browsers expose no way to get glyph outlines — only the pixels a font draws. The
+alternatives were to bundle a font parser plus font files (hundreds of KB, and limited to
+whatever we shipped) or to derive outlines from the render.
+
+**Built a raster-to-polygon tracer** (`src/paint/trace.ts`). Every filled cell contributes
+the sides facing an empty neighbour as directed edges; shared interior sides are never
+emitted, so survivors chain into closed loops. Signed area separates outers from holes,
+and each hole nests into the smallest outer containing it — which is what makes the letter
+"O" a ring rather than a disc, and handles a counter inside a shape inside a larger shape.
+
+Two subtleties worth recording:
+
+- **Closed-loop simplification needed its own routine.** Plain Douglas–Peucker pins the
+  first and last points, which for a loop means pinning wherever tracing happened to start
+  — usually mid-edge — leaving a spurious vertex and making the output depend on the
+  starting point. `simplifyClosed` anchors at an extreme point (always a true corner) and
+  splits at the point farthest from it. There's a test asserting rotation invariance.
+- **The winding convention is now documented in the code**, because getting it backwards
+  silently reclassifies every outline as a discarded hole — which is exactly what my first
+  test fixtures did.
+
+**Bonus:** the tracer is a general mask-to-outline converter, so part mode now falls back
+to tracing for stroke-only SVGs. Those previously errored out, since SVGLoader correctly
+returns zero fillable shapes for them.
+
+Text supports multi-line, any installed font, and bold. 47 trace tests; 227 total.
+
+
 ### 2026-08-10 — v0.4.2: part mode confirmed working; stale-build detection
 
 **Part mode verified in PrusaSlicer by Ian: smart fill and bucket fill work on the decals.**

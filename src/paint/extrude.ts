@@ -19,6 +19,7 @@
 import * as THREE from 'three';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import type { Tri, Vec3 } from '../mmu/codec.ts';
+import type { Polygon } from './trace.ts';
 import { projectorFromHit } from './stamp.ts';
 
 export interface ExtrudeOptions {
@@ -51,11 +52,38 @@ export function parseSvgShapes(svgText: string): THREE.Shape[] {
 }
 
 /**
- * Build the decal prism and return it as world-space triangles.
- * Returns an empty array if the SVG has no fillable geometry (stroke-only art).
+ * Traced polygons -> Three shapes.
+ *
+ * Used for text, which has no SVG paths to read, and as a fallback for
+ * stroke-only SVGs that legitimately produce no fillable shapes. Input
+ * coordinates are normalized 0..1; the extruder rescales anyway, so the only
+ * thing that matters here is preserving proportion and hole structure.
  */
-export function extrudeSvg(svgText: string, opts: ExtrudeOptions): Tri[] {
-  const shapes = parseSvgShapes(svgText);
+export function polygonsToShapes(polys: Polygon[], aspect = 1): THREE.Shape[] {
+  return polys.map((poly) => {
+    const shape = new THREE.Shape();
+    const trace = (pts: readonly (readonly [number, number])[], path: THREE.Path) => {
+      pts.forEach(([x, y], i) => {
+        const px = x * aspect;
+        if (i === 0) path.moveTo(px, y);
+        else path.lineTo(px, y);
+      });
+      path.closePath();
+    };
+    trace(poly.outer, shape);
+    for (const hole of poly.holes) {
+      const p = new THREE.Path();
+      trace(hole, p);
+      shape.holes.push(p);
+    }
+    return shape;
+  });
+}
+
+/**
+ * Build the decal prism from ready-made shapes and return world-space triangles.
+ */
+export function extrudeShapes(shapes: THREE.Shape[], opts: ExtrudeOptions): Tri[] {
   if (shapes.length === 0) return [];
 
   const { point, normal, widthMm, heightMm, thicknessMm, rollRad = 0, mirrorX = false } = opts;
@@ -112,4 +140,13 @@ export function extrudeSvg(svgText: string, opts: ExtrudeOptions): Tri[] {
   geom.dispose();
   if (nonIndexed !== geom) nonIndexed.dispose();
   return tris;
+}
+
+/**
+ * Build the decal prism from an SVG.
+ * Returns an empty array if the SVG has no fillable geometry (stroke-only art) —
+ * callers can fall back to traced polygons.
+ */
+export function extrudeSvg(svgText: string, opts: ExtrudeOptions): Tri[] {
+  return extrudeShapes(parseSvgShapes(svgText), opts);
 }

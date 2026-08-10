@@ -97,8 +97,9 @@ dependency).
 ## Using it
 
 1. Load an STL
-2. Add SVGs — they stay in a library for the session, so you can place any of them at any
-   time. Use transparent backgrounds; a white background becomes a painted region
+2. Add SVGs, or type text and pick a font — both land in a library for the session, so you
+   can place any of them at any time. Use transparent SVG backgrounds; a white background
+   becomes a painted region
 3. Click a thumbnail to arm it, then click the model to place a decal
 4. Position it: **drag** on the model, **arrow keys** to nudge by 0.01–5 mm, or the
    **align** buttons to centre it on the face
@@ -147,26 +148,45 @@ fixtures. If a future PrusaSlicer changes the format, the tests fail immediately
 src/mmu/codec.ts       encode/decode, tree utilities, subdivision
 src/paint/stamp.ts     projector, footprint query, multi-decal painting
 src/paint/svgMask.ts   SVG rasterization and sampling
-src/paint/extrude.ts   SVG outlines to 3D prisms (part mode)
+src/paint/trace.ts     raster to polygon outlines, with hole nesting
+src/paint/extrude.ts   outlines to 3D prisms (part mode)
 src/app/decals.ts      decal model and undo history (no Three.js, no DOM)
+src/app/text.ts        text rendering and tracing
 src/io/stl.ts          STL reader (binary + ASCII)
 src/io/threemf.ts      multi-volume 3MF writer
 src/main.ts            viewport, interaction, panel
 phase0/                Python validation scripts and 3MF generators
 ```
 
-The engine is deliberately separable from the app: `codec`, `stamp`, `decals` and `threemf`
-have no Three.js or DOM dependencies, which is why they're covered by 180 headless tests.
+The engine is deliberately separable from the app: `codec`, `stamp`, `trace`, `decals` and
+`threemf` have no Three.js or DOM dependencies, which is why they're covered by 227
+headless tests.
 
 `phase0/` holds the standalone Python tools used to reverse-engineer and verify the format.
 They're stdlib-only — `python3 phase0/test_codec.py` and `python3 phase0/make_toolhead_probe.py`
 still work and remain useful for generating diagnostic files.
 
+## Text
+
+Type text, pick any font installed on your machine, and place it like any other decal.
+
+Part mode needs real geometry, and browsers won't hand over glyph outlines — only the
+pixels they draw. Rather than bundle a font parser and font files (hundreds of kilobytes,
+and you'd be stuck with whatever we shipped), the text is rendered at high resolution and
+the result is traced back into polygons. Every font on the machine stays available and
+there's no new dependency.
+
+The tracer is a general mask-to-outline converter, so it also rescues stroke-only SVGs that
+contain no fillable shapes — SVGLoader correctly returns nothing for those, and part mode
+now falls back to tracing instead of refusing.
+
+Traced outlines are polygonal rather than curved, but at 220px per line the error is a
+fraction of a printed millimetre, well under what a 0.4mm nozzle resolves.
+
 ## Roadmap
 
 - Cylindrical and conformal projection for curved surfaces
 - Scale and rotate handles on the decal itself, not just sliders
-- Text tool
 - Basic modeling: primitives, booleans
 - Offline PWA
 

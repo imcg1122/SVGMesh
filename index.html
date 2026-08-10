@@ -33,10 +33,14 @@
       legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; padding: 0; }
       label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
 
-      select, input[type="file"], input[type="number"] {
+      select, input[type="file"], input[type="number"], textarea {
         background: #1b1f24; color: var(--text); border: 1px solid var(--line);
         border-radius: 6px; padding: 6px; font-size: 12px; width: 100%;
       }
+      textarea { resize: vertical; font-family: inherit; margin-top: 4px; }
+      .textRow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+      .textRow select { flex: 1; }
+      .textRow .check { margin-top: 0; white-space: nowrap; }
       input[type="range"] { width: 100%; }
       input[type="number"] { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -143,10 +147,21 @@
       </fieldset>
 
       <fieldset>
-        <legend>SVG library</legend>
+        <legend>Library</legend>
         <input type="file" id="svg" accept=".svg" multiple />
+
+        <label for="textInput">Or add text</label>
+        <textarea id="textInput" rows="2" placeholder="Type text…"></textarea>
+        <div class="textRow">
+          <select id="fontFamily"></select>
+          <label class="check"><input type="checkbox" id="fontBold" checked /> Bold</label>
+        </div>
+        <div class="btnRow">
+          <button class="ghost" id="addText">Add text to library</button>
+        </div>
+
         <div id="assetGrid"></div>
-        <div class="note" id="assetHint">Add SVGs, pick one, then click the model to place it.</div>
+        <div class="note" id="assetHint">Add art, pick one, then click the model to place it.</div>
       </fieldset>
 
       <fieldset>

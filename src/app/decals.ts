@@ -12,15 +12,22 @@
 
 import type { Vec3 } from '../mmu/codec.ts';
 import type { Mask } from '../paint/stamp.ts';
+import type { Polygon } from '../paint/trace.ts';
 
-/** A loaded SVG, shared by any number of placed decals. */
+/** A loaded SVG or piece of text, shared by any number of placed decals. */
 export interface DecalAsset {
   id: string;
   name: string;
-  svgText: string;
   mask: Mask;
   /** width / height of the source artwork. */
   aspect: number;
+  /** Present for SVG files — the exact source of outlines for part mode. */
+  svgText?: string;
+  /**
+   * Traced outlines, used when there are no SVG paths to read: text, and
+   * stroke-only SVGs that produce no fillable shapes.
+   */
+  polygons?: Polygon[];
 }
 
 /** One placed instance of an asset. */
