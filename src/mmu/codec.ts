@@ -214,38 +214,40 @@ export function subdivide4(v0: Vec3, v1: Vec3, v2: Vec3): Tri[] {
 
 export type Classifier = (p: Vec3) => number;
 
+/** Return true when a region provably contains no paint, so recursion can stop. */
+export type EmptyTest = (a: Vec3, b: Vec3, c: Vec3) => boolean;
+
 /**
- * Adaptively subdivide a triangle against a classifier.
+ * Subdivide a triangle to a fixed depth and classify each leaf, then prune
+ * uniform subtrees.
  *
- * Samples the three corners plus the centroid. Corner-only sampling misses thin
- * features that pass through the middle of a triangle, which matters for the
- * hairline strokes common in icon SVGs.
+ * Subdivision is UNCONDITIONAL down to `depth`. An earlier version stopped as
+ * soon as its sample points agreed, which silently dropped any decal smaller
+ * than the triangle it sat on: all four samples landed outside the artwork, all
+ * agreed on "unpainted", and recursion never started. Sampling cannot prove a
+ * region is empty — only that the samples missed.
+ *
+ * `isEmpty` is the safe version of that optimization: it takes a whole region
+ * and must be conservative. In practice it tests the region against the decal's
+ * bounding rectangle, which prunes the vast majority of the recursion without
+ * ever discarding real paint.
+ *
+ * Leaves are classified at their centroid — the unbiased point sample for a
+ * region. Corner sampling would double-count vertices shared with neighbours.
  */
 export function buildTree(
   v0: Vec3,
   v1: Vec3,
   v2: Vec3,
   classify: Classifier,
-  maxDepthAllowed: number,
-  depth = 0,
+  depth: number,
+  isEmpty?: EmptyTest,
 ): Node {
-  const samples = [classify(v0), classify(v1), classify(v2), classify(centroid(v0, v1, v2))];
-
-  const first = samples[0];
-  if (samples.every((s) => s === first)) return leaf(first);
-
-  if (depth >= maxDepthAllowed) {
-    // Out of budget: majority vote.
-    const counts = new Map<number, number>();
-    for (const s of samples) counts.set(s, (counts.get(s) ?? 0) + 1);
-    let best = first;
-    let bestN = 0;
-    for (const [s, n] of counts) if (n > bestN) [best, bestN] = [s, n];
-    return leaf(best);
-  }
+  if (isEmpty?.(v0, v1, v2)) return leaf(0);
+  if (depth <= 0) return leaf(classify(centroid(v0, v1, v2)));
 
   const children = subdivide4(v0, v1, v2).map(([a, b, c]) =>
-    buildTree(a, b, c, classify, maxDepthAllowed, depth + 1),
+    buildTree(a, b, c, classify, depth - 1, isEmpty),
   );
   return prune(split(children));
 }

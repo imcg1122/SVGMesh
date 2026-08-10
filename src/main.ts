@@ -268,7 +268,7 @@ function refreshExport(): void {
 exportBtn.addEventListener('click', async () => {
   if (!svg || !hitPoint || !hitNormal) return;
 
-  const [edge, depth] = $<HTMLSelectElement>('quality').value.split(',').map(Number);
+  const targetFeatureMm = parseFloat($<HTMLSelectElement>('quality').value);
   const state = parseInt($<HTMLSelectElement>('extruder').value, 10);
   const base = parseInt($<HTMLSelectElement>('base').value, 10);
 
@@ -290,8 +290,7 @@ exportBtn.addEventListener('click', async () => {
       projector: projectorFromHit(hitPoint, hitNormal, w, h, roll),
       mask: svg.mask,
       state,
-      targetEdgeMm: edge,
-      maxDepth: depth,
+      targetFeatureMm,
     });
 
     if (result.stats.paintedTriangles === 0) {
@@ -315,10 +314,10 @@ exportBtn.addEventListener('click', async () => {
     const s = result.stats;
     say(
       `Exported ${stlName}-stamped.3mf in ${ms} ms\n` +
-        `${s.inputTriangles.toLocaleString()} → ${s.outputTriangles.toLocaleString()} triangles\n` +
-        `${s.paintedTriangles.toLocaleString()} painted on toolhead ${state}\n` +
-        `${(data.length / 1024).toFixed(0)} KB` +
-        (s.hitTriangleLimit ? '\n\nHit the triangle safety limit — try a coarser detail setting.' : ''),
+        `${s.paintedTriangles.toLocaleString()} of ${s.triangles.toLocaleString()} triangles painted ` +
+        `on toolhead ${state}\n` +
+        `Resolved to ${s.effectiveResolutionMm.toFixed(3)} mm (tree depth ${s.maxTreeDepth})\n` +
+        `${(data.length / 1024).toFixed(0)} KB — mesh unchanged, no repair needed`,
     );
   } catch (err) {
     say(`Export failed.\n${(err as Error).message}`);

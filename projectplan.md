@@ -175,27 +175,19 @@ Mask resolution isn't the bottleneck — subdivision depth is.
 
 ## 7. Needs from Ian — current asks
 
-**① The crispness test — the last unretired risk.** Open https://imcg1122.github.io/SVGMesh/
-(or `npm run dev`), load `blank small hexagon token.stl` and `food-restaurant-icon.svg`,
-click the token's **top face**, set width ~15mm, decal toolhead 2, export, open in
-PrusaSlicer.
+**① Re-test after the manifold fix.** Same procedure: token + cutlery icon on the top face,
+~15mm wide, toolhead 2. Confirm:
 
-The token is only 2mm tall, so the icon has to go on the top face — the sides have almost
-no area.
+- **No "open edges" warning and no repair prompt.** This is the fix that matters.
+- The Detail settings now visibly differ (they should: depth 4→7 across the range)
+- The icon still lands on toolhead 2
 
-Run it at **each of the four Detail settings** and report:
+**② Print one.** Everything from here is preview-versus-reality. A single printed token at
+0.2mm Detail tells us more than any screenshot.
 
-- Do the cutlery icon's thin strokes survive, or break up / stair-step?
-- Which setting is the first one that looks acceptable?
-- Export time and resulting file size at each
-- Does the sliced preview put the icon on toolhead 2 cleanly?
-
-This determines whether pre-subdivision + quadtree is good enough, or whether we need
-partial (2/3-way) splits to clean up boundaries — see Risk 2.
-
-**② UX friction.** First contact with the placement UI. What's missing or annoying? Known
-gaps: no drag-to-move after placing (you re-click), no live paint preview (the quad is an
-approximation until export), no undo.
+**③ UX friction.** What's missing or annoying? Known gaps: no drag-to-move after placing
+(you re-click), no live paint preview (the quad is an approximation until export), no undo,
+one decal at a time.
 
 ### Received ✅
 
@@ -212,16 +204,24 @@ regenerable from the scripts. Worth keeping out of a public repo.
 
 ## 8. Risks
 
-**1. Edge crispness — still the big one.** Ian confirms Variant B (pre-subdivided geometry,
-shallow tree) is *definitely smoother* than Variant A (coarse geometry, deep tree), despite
-similar leaf counts. **Decision: pre-subdivision of the footprint is the primary quality
-lever, not tree depth.** Still needs a real-logo test before it's retired.
+**1. Edge crispness — ✅ effectively retired 2026-08-10.** The earlier "Variant B is
+smoother" conclusion was wrong, or at least misattributed: both variants were already
+resolving far below what a 0.4mm nozzle can print, and the real difference was the
+sample-agreement bug dropping detail. With subdivision now unconditional and expressed in
+millimetres, 0.2mm resolution is reached at tree depth 5 for ~2.5KB of paint data on a 25mm
+part. The binding constraint is the nozzle, not the encoding.
 
-**2. T-junctions / partial splits — risk raised.** Ian's ground-truth file uses 2-way and
-3-way splits heavily (nibbles `1`, `5`, `6`, `A` appear throughout), confirming PrusaSlicer
-relies on them to keep adjacent triangles consistent. We currently emit uniform 4-way
-splits only. Our codec already supports partial splits, but the *generator* doesn't use
-them. If boundary artifacts show up, this is the fix.
+Remaining unknown: how it looks **printed**, versus in preview. Worth one physical test.
+
+**2. T-junctions — ✅ RETIRED 2026-08-10.** This one bit us for real: geometry
+pre-subdivision produced 144 open edges, PrusaSlicer demanded a repair, and the repair
+destroyed the paint. Retired *by construction* — the mesh is no longer modified at all, so
+T-junctions cannot occur. A test asserts watertightness is preserved.
+
+PrusaSlicer's own brush still leans on partial 2-way and 3-way splits (246/108/37 in Ian's
+ground-truth file) and we emit only 4-way. That's now a cosmetic question at sub-resolution
+scale rather than a geometric one, since the tree is virtual. The codec supports partial
+splits if boundary quality ever demands them.
 
 **3. Format drift.** Undocumented by Prusa. Mitigation: the round-trip test against real
 output is now a permanent regression test.
@@ -260,6 +260,54 @@ PrusaSlicer's own tool falls over.
 ---
 
 ## 11. Changelog
+
+### 2026-08-10 — Two serious bugs found by real-world testing and fixed
+
+Ian's first real run surfaced two defects, one visible and one silent.
+
+**Bug 1 — open edges / destroyed paint (critical).** Exports had 144 open edges. PrusaSlicer
+demanded an STL repair, and repairing rebuilt the mesh and wiped the paint, leaving a blank
+model. **Cause: our own geometry pre-subdivision.** Subdividing triangles inside the decal
+footprint but not their neighbours creates T-junctions — the new midpoint vertices don't
+exist on the adjacent un-subdivided triangles. Measured on the hexagon token: 0 open edges
+before, 108 after.
+
+**Fix: never modify the mesh.** PrusaSlicer's segmentation tree is *virtual* — applied at
+slice time, geometry untouched. That's the whole point of painting versus embossing, and
+pre-subdivision was solving a problem that didn't exist while creating one that did. Risk 2
+(T-junctions) is now retired by construction rather than mitigated.
+
+**Bug 2 — all Detail settings looked identical (silent).** Two independent causes:
+
+1. Every preset was already past the printer. Effective resolutions were 0.25 / 0.0625 /
+   0.0156 / 0.0039 mm against a 0.4mm nozzle. All four were far below what FDM can render,
+   so of course they looked the same.
+2. **A decal smaller than a triangle was silently dropped entirely.** `buildTree` stopped
+   recursing as soon as its four sample points agreed. For a small decal in the middle of a
+   large triangle, all four samples land outside the artwork, all agree on "unpainted", and
+   recursion never begins. Sampling can never prove a region is empty — only that the
+   samples missed it. Pre-subdivision had been masking this by forcing triangles small
+   enough that the samples caught the mask.
+
+**Fix:** subdivision is now unconditional to a depth derived per triangle from a target
+feature size in mm, with a conservative region-level early-out (region entirely outside the
+decal rectangle → no paint possible). Cost now scales with decal area, not mesh size.
+
+Detail is expressed in millimetres rather than as an abstract quality level. Measured on the
+token: 0.4mm → depth 4 / 1.1KB, 0.2mm → depth 5 / 2.5KB, 0.1mm → depth 6 / 5.9KB, 0.05mm →
+depth 7 / 12.3KB. Zero open edges at every setting, 15–53ms.
+
+**Also confirmed working:** toolhead assignment is correct in PrusaSlicer.
+
+**Tests added:** watertightness preservation on a closed cube; a decal much smaller than a
+triangle; a hairline stroke through a triangle's middle; per-triangle depth derivation.
+32 stamp checks, 76 codec checks.
+
+**Calibration reference** from Ian's hand-painted file: PrusaSlicer's own brush produces
+trees 4–5 deep (≈0.195mm on 6.25mm triangles) and leans heavily on partial splits — 246
+four-way, 108 three-way, 37 two-way. We emit only four-way, which is fine now that the tree
+is virtual: mismatches between neighbours are cosmetic at sub-resolution scale rather than
+geometric.
 
 ### 2026-08-10 — Shipped. Repo public, CI green, app live
 

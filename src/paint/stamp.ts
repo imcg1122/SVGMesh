@@ -1,19 +1,33 @@
 /**
  * The stamp engine: project an SVG mask onto mesh triangles and emit MMU paint.
  *
- * Two levers control fidelity, and they are not equivalent:
+ * THE MESH IS NEVER MODIFIED. This is the central design rule and it is not
+ * negotiable.
  *
- *   1. PRE-SUBDIVISION of the mesh inside the decal footprint (`targetEdgeMm`)
- *   2. QUADTREE DEPTH within each triangle (`maxDepth`)
+ * PrusaSlicer's segmentation quadtree is *virtual*: each triangle carries a
+ * subdivision tree that the slicer applies at slice time. The geometry itself
+ * stays exactly as it was. That is the entire point of painting rather than
+ * embossing.
  *
- * Empirically (2026-08-09, PrusaSlicer 2.9.6 on an XL 5T) pre-subdivision gives
- * visibly smoother edges than quadtree depth alone at comparable leaf counts,
- * so it is the primary lever. Quadtree depth then cheaply refines within the
- * already-small triangles. Only triangles inside the footprint get subdivided,
- * so the rest of the model stays cheap.
+ * An earlier version pre-subdivided the mesh inside the decal footprint,
+ * thinking it improved edge quality. It did not — it produced T-junctions,
+ * because a subdivided triangle introduces midpoint vertices that its
+ * un-subdivided neighbours know nothing about. Measured on a 108-triangle
+ * hexagon token: 0 open edges before, 108 after. PrusaSlicer then demanded a
+ * repair, and repairing rebuilt the mesh and discarded all the paint.
+ *
+ * So fidelity is controlled by ONE lever: how deep the virtual tree goes,
+ * expressed as a target feature size in millimetres. Depth is chosen per
+ * triangle from its own size, which gives uniform real-world resolution
+ * whether the mesh is coarse or dense.
+ *
+ * Calibration note: a 0.4mm nozzle cannot render detail finer than roughly
+ * 0.2mm no matter what the file says. Targets below that cost file size and
+ * time and buy nothing. For reference, PrusaSlicer's own brush produces trees
+ * 4-5 deep, resolving about 0.195mm on the 6.25mm triangles it was painting.
  */
 
-import { buildTree, encode, prune, subdivide4 } from '../mmu/codec.ts';
+import { buildTree, encode, prune } from '../mmu/codec.ts';
 import type { Tri, Vec3 } from '../mmu/codec.ts';
 
 // --- tiny vector helpers ---------------------------------------------------
@@ -105,59 +119,70 @@ export interface StampOptions {
   projector: PlanarProjector;
   /** Returns true where the SVG is filled. UV outside 0..1 is never queried. */
   mask: Mask;
-  /** Extruder to paint with. Must be >= 2 to be visible over a base of 1. */
+  /** Extruder to paint with. Must differ from the model's own extruder. */
   state: number;
-  /** Pre-subdivide footprint triangles until edges are below this, in mm. */
-  targetEdgeMm?: number;
-  /** Quadtree depth within each triangle. */
+  /**
+   * Smallest detail worth resolving, in mm. Tree depth is derived per triangle
+   * from this. Below ~0.2mm a 0.4mm nozzle cannot render the difference.
+   */
+  targetFeatureMm?: number;
+  /** Hard ceiling on tree depth, whatever the target implies. */
   maxDepth?: number;
   /** Skip faces angled more than this away from the projector, in degrees. */
   maxFacingAngleDeg?: number;
-  /** Safety valve so a huge model can't lock the tab up. */
-  maxTriangles?: number;
 }
 
 export interface StampResult {
+  /** The input triangles, unchanged. Returned for convenience only. */
   tris: Tri[];
+  /** One entry per triangle, index-aligned with `tris`. */
   segments: string[];
   stats: {
-    inputTriangles: number;
-    outputTriangles: number;
-    subdividedTriangles: number;
+    triangles: number;
     paintedTriangles: number;
-    hitTriangleLimit: boolean;
+    /** Deepest virtual subdivision actually used. */
+    maxTreeDepth: number;
+    /** Finest detail resolved, in mm — the honest resolution number. */
+    effectiveResolutionMm: number;
   };
 }
 
 const maxEdge = (t: Tri): number =>
   Math.max(len(sub(t[1], t[0])), len(sub(t[2], t[1])), len(sub(t[0], t[2])));
 
-/** Does this triangle's UV projection touch the decal rectangle at all? */
-function touchesFootprint(t: Tri, proj: PlanarProjector): boolean {
+/**
+ * Does this triangle's UV projection touch the decal rectangle at all?
+ *
+ * Conservative: it tests the triangle's UV bounding box, so it can say "yes" for
+ * a triangle that only nearly touches. It must never say "no" for one that does,
+ * because this is what lets recursion stop early.
+ */
+function touchesFootprint(a: Vec3, b: Vec3, c: Vec3, proj: PlanarProjector): boolean {
   let uMin = Infinity;
   let uMax = -Infinity;
   let vMin = Infinity;
   let vMax = -Infinity;
-  for (const p of t) {
+  for (const p of [a, b, c]) {
     const [u, v] = worldToUV(p, proj);
-    uMin = Math.min(uMin, u);
-    uMax = Math.max(uMax, u);
-    vMin = Math.min(vMin, v);
-    vMax = Math.max(vMax, v);
+    if (u < uMin) uMin = u;
+    if (u > uMax) uMax = u;
+    if (v < vMin) vMin = v;
+    if (v > vMax) vMax = v;
   }
   return uMax >= 0 && uMin <= 1 && vMax >= 0 && vMin <= 1;
 }
 
+/**
+ * Depth needed to resolve `targetMm` on a triangle whose longest edge is `edge`.
+ * Each level halves the edge, so this is just a log2 with a ceiling.
+ */
+export function depthForTriangle(edge: number, targetMm: number, cap: number): number {
+  if (targetMm <= 0 || edge <= targetMm) return 0;
+  return Math.min(cap, Math.ceil(Math.log2(edge / targetMm)));
+}
+
 export function stamp(input: Tri[], opts: StampOptions): StampResult {
-  const {
-    projector,
-    mask,
-    state,
-    targetEdgeMm = 1.0,
-    maxDepth = 4,
-    maxFacingAngleDeg = 80,
-    maxTriangles = 2_000_000,
-  } = opts;
+  const { projector, mask, state, targetFeatureMm = 0.2, maxDepth = 7, maxFacingAngleDeg = 80 } = opts;
 
   const facingLimit = Math.cos((maxFacingAngleDeg * Math.PI) / 180);
 
@@ -165,7 +190,8 @@ export function stamp(input: Tri[], opts: StampOptions): StampResult {
   // footprint. Back-face culling is what stops the decal bleeding through to
   // the far side of the model.
   const isCandidate = (t: Tri): boolean =>
-    dot(triNormal(t), projector.direction) < -facingLimit && touchesFootprint(t, projector);
+    dot(triNormal(t), projector.direction) < -facingLimit &&
+    touchesFootprint(t[0], t[1], t[2], projector);
 
   const classify = (p: Vec3): number => {
     const [u, v] = worldToUV(p, projector);
@@ -173,56 +199,44 @@ export function stamp(input: Tri[], opts: StampOptions): StampResult {
     return mask(u, v) ? state : 0;
   };
 
-  const outTris: Tri[] = [];
+  // Safe early-out for the recursion: a region entirely outside the decal
+  // rectangle cannot contain paint, so there's no point subdividing it. This is
+  // what keeps the cost proportional to decal area rather than triangle area.
+  const isEmpty = (a: Vec3, b: Vec3, c: Vec3): boolean =>
+    !touchesFootprint(a, b, c, projector);
+
   const segments: string[] = [];
-  let subdivided = 0;
   let painted = 0;
-  let hitLimit = false;
+  let deepest = 0;
+  let finest = Infinity;
 
   for (const t of input) {
     if (!isCandidate(t)) {
-      outTris.push(t);
       segments.push('');
       continue;
     }
 
-    // Pre-subdivide this triangle down to the target edge length.
-    let batch: Tri[] = [t];
-    if (targetEdgeMm > 0) {
-      let guard = 0;
-      while (batch.some((b) => maxEdge(b) > targetEdgeMm) && guard < 8) {
-        if (outTris.length + batch.length * 4 > maxTriangles) {
-          hitLimit = true;
-          break;
-        }
-        const next: Tri[] = [];
-        for (const b of batch) {
-          if (maxEdge(b) > targetEdgeMm) next.push(...subdivide4(b[0], b[1], b[2]));
-          else next.push(b);
-        }
-        batch = next;
-        guard++;
-      }
-    }
-    if (batch.length > 1) subdivided++;
+    const edge = maxEdge(t);
+    const depth = depthForTriangle(edge, targetFeatureMm, maxDepth);
+    const seg = encode(prune(buildTree(t[0], t[1], t[2], classify, depth, isEmpty)));
 
-    for (const b of batch) {
-      const seg = encode(prune(buildTree(b[0], b[1], b[2], classify, maxDepth)));
-      outTris.push(b);
-      segments.push(seg);
-      if (seg) painted++;
+    segments.push(seg);
+    if (seg) {
+      painted++;
+      deepest = Math.max(deepest, depth);
+      finest = Math.min(finest, edge / 2 ** depth);
     }
   }
 
   return {
-    tris: outTris,
+    // Same array, same order, same geometry. Nothing was subdivided.
+    tris: input,
     segments,
     stats: {
-      inputTriangles: input.length,
-      outputTriangles: outTris.length,
-      subdividedTriangles: subdivided,
+      triangles: input.length,
       paintedTriangles: painted,
-      hitTriangleLimit: hitLimit,
+      maxTreeDepth: deepest,
+      effectiveResolutionMm: Number.isFinite(finest) ? finest : 0,
     },
   };
 }

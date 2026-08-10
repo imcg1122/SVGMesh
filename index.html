@@ -49,6 +49,7 @@
       }
       button:disabled { background: #4a5058; color: #8b929b; cursor: not-allowed; }
       .val { float: right; color: var(--text); font-variant-numeric: tabular-nums; }
+      .note { margin-top: 8px; font-size: 11px; line-height: 1.4; color: var(--muted); }
       #status {
         margin-top: 12px; padding: 10px; border-radius: 6px; background: #1b1f24;
         border: 1px solid var(--line); font-size: 12px; color: var(--muted);
@@ -107,11 +108,15 @@
 
         <label for="quality">Detail</label>
         <select id="quality">
-          <option value="2.0,3">Draft — fastest, smallest file</option>
-          <option value="1.0,4" selected>Normal</option>
-          <option value="0.5,5">Fine — slower, larger file</option>
-          <option value="0.25,6">Very fine — thin strokes, big file</option>
+          <option value="0.4">0.4 mm — matches a 0.4 nozzle</option>
+          <option value="0.2" selected>0.2 mm — recommended</option>
+          <option value="0.1">0.1 mm — thin strokes</option>
+          <option value="0.05">0.05 mm — past what FDM resolves</option>
         </select>
+        <div class="note">
+          Detail is the smallest feature resolved. A 0.4 mm nozzle can't print finer
+          than about 0.2 mm, so smaller values mostly just grow the file.
+        </div>
 
         <button id="export" disabled>Export 3MF</button>
       </fieldset>

@@ -28,20 +28,41 @@ artwork already on toolhead 2 (or 3, 4, 5).
 1. The SVG is rasterized to an alpha mask — the browser's own SVG renderer handles fill rules,
    clip paths, strokes and nested groups correctly, which hand-rolled path parsing rarely does
 2. You click the model to place a planar projector, then set size and rotation
-3. Triangles inside the footprint are pre-subdivided, then each is adaptively subdivided into a
-   quadtree tested against the mask
-4. Each triangle's tree is encoded to PrusaSlicer's `slic3rpe:mmu_segmentation` hex string
+3. Each triangle in the footprint gets a **virtual** subdivision tree, tested against the mask
+4. Each tree is encoded to PrusaSlicer's `slic3rpe:mmu_segmentation` hex string
 5. A 3MF is assembled with the paint data plus the per-volume extruder assignment
 
 Back faces and steeply-angled faces are culled, so a decal on the front doesn't bleed through to
 the back.
 
-### Two fidelity levers, and they're not equivalent
+### The mesh is never modified
 
-Pre-subdividing the mesh inside the footprint gives **visibly smoother edges** than quadtree
-depth alone at comparable cost. Testing on PrusaSlicer 2.9.6 with an XL 5T made this clear, so
-pre-subdivision is the primary lever and tree depth refines within the already-small triangles.
-The Detail dropdown drives both together.
+This is the central rule. PrusaSlicer's subdivision tree is *virtual* — the slicer applies it at
+slice time and the geometry stays byte-identical. Your STL goes in and comes out untouched.
+
+That matters more than it sounds. An earlier version pre-subdivided triangles inside the decal
+footprint, which seemed like a quality win and wasn't: subdividing one triangle and not its
+neighbour creates T-junctions. A watertight 108-triangle token came out with 108 open edges,
+PrusaSlicer demanded a repair, and the repair rebuilt the mesh and threw away all the paint.
+There's a test asserting watertightness is preserved so it can't come back.
+
+### Detail is a distance, not a quality slider
+
+Fidelity has one lever: the smallest feature worth resolving, in millimetres. Tree depth is
+derived per triangle from its own size, so a coarse mesh and a dense one land on the same
+real-world resolution.
+
+Measured on a 25mm hexagon token:
+
+| Detail | Tree depth | Resolved | Paint data |
+|--------|-----------|----------|------------|
+| 0.4 mm | 4 | 0.391 mm | 1.1 KB |
+| 0.2 mm | 5 | 0.195 mm | 2.5 KB |
+| 0.1 mm | 6 | 0.098 mm | 5.9 KB |
+| 0.05 mm | 7 | 0.049 mm | 12.3 KB |
+
+A 0.4mm nozzle can't render much below 0.2mm, so finer settings mostly buy file size. For
+reference, PrusaSlicer's own brush produces trees 4–5 deep.
 
 ## Getting started
 
