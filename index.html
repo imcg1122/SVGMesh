@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SVGMesh — stamp SVGs onto STLs as MMU paint</title>
+    <style>
+      :root {
+        --bg: #1b1f24;
+        --panel: #23282f;
+        --line: #333a43;
+        --text: #e6e9ee;
+        --muted: #98a2b3;
+        --accent: #ff8000;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+        display: flex;
+      }
+      #view { flex: 1; position: relative; }
+      #view canvas { display: block; }
+
+      #panel {
+        width: 300px;
+        flex: none;
+        background: var(--panel);
+        border-left: 1px solid var(--line);
+        padding: 16px;
+        overflow-y: auto;
+      }
+      h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .3px; }
+      .sub { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
+      fieldset { border: 0; border-top: 1px solid var(--line); margin: 0 0 14px; padding: 12px 0 0; }
+      legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; padding: 0; }
+      label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+      input[type="range"] { width: 100%; }
+      select, input[type="file"] {
+        width: 100%; background: #1b1f24; color: var(--text);
+        border: 1px solid var(--line); border-radius: 6px; padding: 6px; font-size: 12px;
+      }
+      button {
+        width: 100%; padding: 10px; margin-top: 6px; cursor: pointer;
+        background: var(--accent); color: #1b1f24; font-weight: 600;
+        border: 0; border-radius: 6px; font-size: 13px;
+      }
+      button:disabled { background: #4a5058; color: #8b929b; cursor: not-allowed; }
+      .val { float: right; color: var(--text); font-variant-numeric: tabular-nums; }
+      #status {
+        margin-top: 12px; padding: 10px; border-radius: 6px; background: #1b1f24;
+        border: 1px solid var(--line); font-size: 12px; color: var(--muted);
+        white-space: pre-wrap; min-height: 42px;
+      }
+      #hint {
+        position: absolute; left: 16px; bottom: 16px; padding: 8px 12px;
+        background: rgba(27,31,36,.85); border: 1px solid var(--line);
+        border-radius: 6px; font-size: 12px; color: var(--muted); pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="view"><div id="hint">Load an STL to begin</div></div>
+
+    <div id="panel">
+      <h1>SVGMesh</h1>
+      <div class="sub">SVG → MMU paint → PrusaSlicer 3MF</div>
+
+      <fieldset>
+        <legend>Model</legend>
+        <label for="stl">STL file</label>
+        <input type="file" id="stl" accept=".stl" />
+      </fieldset>
+
+      <fieldset>
+        <legend>Decal</legend>
+        <label for="svg">SVG file</label>
+        <input type="file" id="svg" accept=".svg" />
+
+        <label for="size">Width <span class="val" id="sizeVal">20.0 mm</span></label>
+        <input type="range" id="size" min="1" max="200" step="0.5" value="20" />
+
+        <label for="rot">Rotation <span class="val" id="rotVal">0°</span></label>
+        <input type="range" id="rot" min="-180" max="180" step="1" value="0" />
+      </fieldset>
+
+      <fieldset>
+        <legend>Output</legend>
+        <label for="extruder">Decal toolhead</label>
+        <select id="extruder">
+          <option value="2" selected>Toolhead 2</option>
+          <option value="3">Toolhead 3</option>
+          <option value="4">Toolhead 4</option>
+          <option value="5">Toolhead 5</option>
+        </select>
+
+        <label for="base">Model toolhead</label>
+        <select id="base">
+          <option value="1" selected>Toolhead 1</option>
+          <option value="2">Toolhead 2</option>
+          <option value="3">Toolhead 3</option>
+          <option value="4">Toolhead 4</option>
+          <option value="5">Toolhead 5</option>
+        </select>
+
+        <label for="quality">Detail</label>
+        <select id="quality">
+          <option value="2.0,3">Draft — fastest, smallest file</option>
+          <option value="1.0,4" selected>Normal</option>
+          <option value="0.5,5">Fine — slower, larger file</option>
+          <option value="0.25,6">Very fine — thin strokes, big file</option>
+        </select>
+
+        <button id="export" disabled>Export 3MF</button>
+      </fieldset>
+
+      <div id="status">Load an STL and an SVG, then click the model to place the decal.</div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

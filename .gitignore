@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+__pycache__/
+*.py[cod]
+
+.DS_Store
+Thumbs.db
+*.log
+
+# Test assets and generated output are kept out of the repo: the sample artwork
+# is third-party and the .3mf files are regenerable from the scripts in phase0/.
+phase0/*.3mf
+phase0/*.stl
+phase0/*.svg
+samples/

@@ -1,0 +1,29 @@
+{
+  "name": "svgmesh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Stamp SVGs onto STL surfaces as PrusaSlicer MMU paint data and export ready-to-slice 3MF.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types src/mmu/codec.test.ts && node --experimental-strip-types src/paint/stamp.test.ts"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "three": "^0.170.0",
+    "three-bvh-csg": "^0.0.17",
+    "three-mesh-bvh": "^0.8.3"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}
