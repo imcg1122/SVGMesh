@@ -40,6 +40,13 @@ let stlName = 'model';
 let hitPoint: Vec3 | null = null;
 let hitNormal: Vec3 | null = null;
 
+/**
+ * Bump this whenever behaviour changes. It's shown in the panel and stamped
+ * into exported filenames, so "which build produced this file?" is never a
+ * guess — a stale cached page cost us a debugging round trip once already.
+ */
+export const BUILD = 'v0.2.0 mesh-preserving';
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $<HTMLDivElement>('status');
 const hintEl = $<HTMLDivElement>('hint');
@@ -48,6 +55,8 @@ const exportBtn = $<HTMLButtonElement>('export');
 const say = (msg: string) => {
   statusEl.textContent = msg;
 };
+
+$<HTMLDivElement>('version').textContent = BUILD;
 
 // --- scene -----------------------------------------------------------------
 
@@ -308,12 +317,15 @@ exportBtn.addEventListener('click', async () => {
       baseExtruder: base,
       objectName: stlName,
     });
-    downloadBlob(data, `${stlName}-stamped.3mf`);
+    // Detail and a timestamp in the filename so successive exports never
+    // overwrite or get confused with each other.
+    const stampId = new Date().toISOString().slice(11, 19).replace(/:/g, '');
+    downloadBlob(data, `${stlName}-th${state}-${targetFeatureMm}mm-${stampId}.3mf`);
 
     const ms = Math.round(performance.now() - t0);
     const s = result.stats;
     say(
-      `Exported ${stlName}-stamped.3mf in ${ms} ms\n` +
+      `Exported in ${ms} ms  ·  ${BUILD}\n` +
         `${s.paintedTriangles.toLocaleString()} of ${s.triangles.toLocaleString()} triangles painted ` +
         `on toolhead ${state}\n` +
         `Resolved to ${s.effectiveResolutionMm.toFixed(3)} mm (tree depth ${s.maxTreeDepth})\n` +

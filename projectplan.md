@@ -13,13 +13,14 @@
 
 | | |
 |---|---|
-| **Phase** | 1 — MVP app |
+| **Phase** | 1 complete ✅ — end-to-end workflow verified in PrusaSlicer. Next: Phase 2 UX. |
 | **Phase 0** | ✅ **CLOSED.** Format fully validated in both directions. |
 | **Decoder** | ✅ 30/30 real PrusaSlicer 2.9.6 triangles parse and re-encode byte-for-byte |
 | **Encoder** | ✅ Accepted by PrusaSlicer. **Mapping confirmed direct: state N → extruder N.** No bug — the original confusion was five identically-coloured filaments. |
 | **Repo** | ✅ Pushed. https://github.com/imcg1122/SVGMesh — public, CI green, 96 tests passing |
 | **Live app** | ✅ https://imcg1122.github.io/SVGMesh/ — auto-deploys from `main` |
-| **Blocked on** | Ian to run the real-world test: cutlery icon on the hexagon token (§7) |
+| **Verified** | Cutlery icon on hexagon token: correct toolhead, no open edges, no repair needed |
+| **Blocked on** | Ian to choose Phase 2 priorities (§7) |
 
 ---
 
@@ -260,6 +261,30 @@ PrusaSlicer's own tool falls over.
 ---
 
 ## 11. Changelog
+
+### 2026-08-10 — Phase 1 complete. Fix verified on hardware-real workflow.
+
+- **Open edges confirmed fixed.** Ian re-tested after a hard refresh: no open-edge
+  warning, no repair prompt, paint intact. The first "still broken" report was a cached
+  page serving the pre-fix bundle.
+- **Anti-staleness measures added** so that can't recur: a build version string shown in
+  the panel and in the export status line, and exported filenames now carry the toolhead,
+  detail setting and a timestamp (`token-th2-0.2mm-143052.3mf`) instead of a single
+  overwriting name.
+- **Verified our writer independently** by running Ian's real STL through the full export
+  path headlessly: 56 vertices, 108 triangles, every edge used exactly twice, 0 open edges.
+  The source STL was also confirmed flawless at every rounding tolerance, so neither end
+  was ever at fault once pre-subdivision was removed.
+
+**Finding: the Detail setting is nearly vestigial, and that's correct.** Ian sees no visual
+difference across the range. Expected: 0.2mm and finer are all below what a 0.4mm nozzle
+resolves, so the only setting that could plausibly show a difference is 0.4mm versus the
+rest, and only on hairline strokes. The binding constraint is the printer.
+
+Implication: **0.2mm is the right default and there is little reason to change it.** The
+0.05mm option exists mainly to demonstrate the ceiling. Candidate simplification later:
+collapse to two options, or hide it behind an "advanced" toggle. Not urgent — it costs
+nothing and the note under the dropdown explains it.
 
 ### 2026-08-10 — Two serious bugs found by real-world testing and fixed
 
