@@ -13,11 +13,12 @@
 
 | | |
 |---|---|
-| **Phase** | 0 — encoding validation |
-| **Decoder** | ✅ Validated against real PrusaSlicer 2.9.6 output. 30/30 painted triangles parse, byte-for-byte idempotent. |
-| **Encoder** | ⚠️ Structurally accepted by PrusaSlicer, but **state → toolhead mapping is off by one somewhere**. Unresolved. |
-| **Blocked on** | Ian to open `phase0/toolhead_probe.3mf` and answer one question (§7) |
-| **Next after that** | Close Phase 0, scaffold the app |
+| **Phase** | 1 — MVP app |
+| **Phase 0** | ✅ **CLOSED.** Format fully validated in both directions. |
+| **Decoder** | ✅ 30/30 real PrusaSlicer 2.9.6 triangles parse and re-encode byte-for-byte |
+| **Encoder** | ✅ Accepted by PrusaSlicer. **Mapping confirmed direct: state N → extruder N.** No bug — the original confusion was five identically-coloured filaments. |
+| **Repo** | Initialized and committed locally. 23 files, 96 tests passing. **Not yet pushed** — needs Ian's credentials (§7). |
+| **Blocked on** | Ian to push, then run the MVP against the hexagon token + cutlery icon |
 
 ---
 
@@ -91,21 +92,22 @@ identical bitstream under `paint_color` (Bambu forked PrusaSlicer's `TriangleSel
 (PrusaSlicer 2.9.6, XL5IS profile): 108 triangles, 30 painted, all parse, all re-encode
 byte-for-byte. Our implementation and Panda2Prusa's agree on the grammar.
 
-### ⚠️ Open: the state → toolhead mapping
+### ✅ Resolved: the state → toolhead mapping is DIRECT
 
-Two sources conflict:
+**State N paints extruder N.** Confirmed twice on 2026-08-09:
 
-- **Panda2Prusa's source** says direct: *"State 0 is the volume's extruder; state N paints
-  extruder N."*
-- **Ian's observation** of our test cubes implies a shift of one: the annulus we wrote as
-  state 2 appeared on TH1, and of four stripes written as states 1–4 only three were
-  visible, on TH1/2/3.
+1. `toolhead_probe.3mf` rendered five distinct patches; the second from the left (state 2)
+   is **TH2**. Patch 6 (state 6) does not render — there is no sixth toolhead on a 5T.
+2. Ian painted `painted blob test.3mf` with **TH2**, and that file contains exactly state 2.
 
-The shifted reading explains all four of Ian's observations; the direct reading explains
-none of them cleanly. But Ian's hand-painted ground truth used **only state 2**, so it
-can't settle which toolhead that corresponds to without knowing which tool he painted with.
+Panda2Prusa's documentation was right. There was never an encoder bug. The earlier
+confusion came entirely from the profile issue below, compounded by the fact that **state 1
+is invisible over a model whose own extruder is 1** — painting extruder 1 onto an
+extruder-1 body is a no-op by definition, so our first test cube looked like it had "lost"
+a stripe.
 
-`phase0/toolhead_probe.3mf` resolves it — see §7.
+**Design consequence:** the app must refuse to export when the decal state equals the base
+volume's extruder, because the result is silently invisible. Implemented in `main.ts`.
 
 ### ⚠️ Profile gotcha found in Ian's setup
 
@@ -172,30 +174,42 @@ Mask resolution isn't the bottleneck — subdivision depth is.
 
 ## 7. Needs from Ian — current asks
 
-**① The one blocking question.** Open `phase0/toolhead_probe.3mf` — a 120×20×3mm bar with
-six painted squares along the top, left to right, written as states 1 through 6.
+**① Push the repo.** It's committed locally with the remote already set, but the sandbox
+has no GitHub credentials so the push has to come from Ian's machine:
 
-> **What toolhead is the SECOND patch from the left?**
-> Toolhead 2 → direct mapping. Toolhead 1 → shifted mapping.
+```
+cd "<this folder>"
+git push -u origin main
+```
 
-Cross-check: if the rightmost (6th) patch prints at all, the mapping is shifted.
-The leftmost patch is expected to be invisible under either reading.
+**② Run the MVP** and report what it does with the real assets:
 
-*Before looking:* set five distinct `filament_colour` values in the profile, or read the
-answer off the sliced preview instead of the 3D view. See §4.
+```
+npm install
+npm run dev
+```
 
-**② Which toolhead did you paint `painted blob test.3mf` with?** It contains exactly one
-painted state, value 2. Knowing the tool you used pins the mapping independently of ①.
+Load `blank small hexagon token.stl`, load `food-restaurant-icon.svg`, click the token's
+top face, set width ~15mm, decal toolhead 2, export, open in PrusaSlicer.
 
-**③ Confirm the repo.** `imcg1122/SVGMesh` — should I initialize the project structure and
-push, and do you want it public or private?
+The interesting question is **edge quality on the cutlery icon's thin strokes** at each
+Detail setting. That's the last unretired risk. Note the token is only 2mm tall, so the
+icon has to land on the top face — a side face has almost no area.
+
+**③ Enable GitHub Pages** once pushed: repo Settings → Pages → Source: GitHub Actions. The
+workflow in `.github/workflows/deploy.yml` runs tests, then builds and deploys on every
+push to `main`. `vite.config.ts` has `base: '/SVGMesh/'` to match the repo name.
 
 ### Received ✅
 
-- `phase0/painted blob test.3mf` — ground truth, decoder validated against it
+- `phase0/painted blob test.3mf` — ground truth; decoder validated against it, and its 30
+  segmentation strings are now permanent regression fixtures in `src/mmu/codec.test.ts`
 - `phase0/blank small hexagon token.stl` — 25 × 21.65 × 2 mm, 108 triangles
-- `phase0/food-restaurant-icon.svg` — viewBox 122.88 × 115.21, cutlery icon, thin strokes.
-  Good crispness test: fine detail on a 2mm-tall token is a demanding case.
+- `phase0/food-restaurant-icon.svg` — viewBox 122.88 × 115.21, cutlery icon, thin strokes
+- `phase0/toolhead_probe.3mf` — answered: mapping is direct
+
+Test assets are **gitignored** — the icon is third-party artwork and the `.3mf` files are
+regenerable from the scripts. Worth keeping out of a public repo.
 
 ---
 
@@ -250,7 +264,33 @@ PrusaSlicer's own tool falls over.
 
 ## 11. Changelog
 
-### 2026-08-09 — Ground truth validated; mapping bug found; scope narrowed
+### 2026-08-09 — Phase 0 closed; repo scaffolded; MVP built
+
+- **Mapping resolved: direct, state N → extruder N.** The toolhead probe showed patch 2 on
+  TH2, and Ian confirmed the blob was painted with TH2. There was no encoder bug — see §4.
+  Root cause of the confusion: five identical filament colours, plus state 1 being
+  invisible over an extruder-1 body.
+- **Phase 0 closed.** Both directions of the format are now validated against real
+  PrusaSlicer 2.9.6 output.
+- **Repo scaffolded and committed locally** (23 files, ~2,900 lines). Remote set to
+  `imcg1122/SVGMesh`. Not pushed — no credentials in the sandbox.
+- **Ported the codec to TypeScript** (`src/mmu/codec.ts`) with 76 tests, including the 30
+  real PrusaSlicer strings as permanent regression fixtures. Added state remapping, needed
+  whenever extruders are renumbered.
+- **Built the stamp engine** (`src/paint/stamp.ts`): planar projector, UV mapping, back-face
+  and grazing-angle culling, adaptive pre-subdivision to a target edge length, then quadtree
+  refinement. 20 headless tests.
+- **Built SVG rasterization, STL reading, 3MF writing, and the MVP app** — load STL, load
+  SVG, click to place, size/rotate, pick toolheads, export.
+- **Guard added:** export is blocked when the decal and base share a toolhead, since that
+  silently produces nothing visible.
+- **Tooling note:** npm registry is blocked in the sandbox, so dependencies are unverified
+  by install. Tests deliberately use Node 22's native type stripping and need no packages,
+  so they run anywhere. `npm run typecheck` still needs a local install.
+- Added a GitHub Actions workflow: test → typecheck → build → deploy to Pages.
+- Test assets gitignored (third-party artwork, regenerable binaries).
+
+### 2026-08-09 — Ground truth validated; mapping bug suspected; scope narrowed
 
 - **Decoder validated against real PrusaSlicer output.** Ian's `painted blob test.3mf`
   (PrusaSlicer 2.9.6, XL5IS) decodes cleanly: 30/30 painted triangles, byte-for-byte
