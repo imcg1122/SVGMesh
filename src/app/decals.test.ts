@@ -29,7 +29,16 @@ function store() {
   return { s, a };
 }
 const place = (s: DecalStore, assetId: string, state = 2) =>
-  s.add({ assetId, point: P, normal: N, widthMm: 20, rollDeg: 0, state });
+  s.add({
+    assetId,
+    point: P,
+    normal: N,
+    widthMm: 20,
+    rollDeg: 0,
+    state,
+    thicknessMm: 0.6,
+    mirrorX: false,
+  });
 
 // ---------------------------------------------------------------------------
 
@@ -113,6 +122,49 @@ section('a new action clears the redo stack');
   check('redo available after undo', s.canRedo, true);
   place(s, a.id);
   check('new action drops the redo branch', s.canRedo, false);
+}
+
+section('duplicating for mirrored placement');
+{
+  const { s, a } = store();
+  const d = place(s, a.id);
+  const copy = s.duplicate(d.id, { normal: [0, 0, -1], mirrorX: true });
+  check('two decals now', s.decals.length, 2);
+  check('copy shares the asset', copy?.assetId, a.id);
+  check('override applied', copy?.normal, [0, 0, -1]);
+  check('mirror flag set', copy?.mirrorX, true);
+  check('unrelated fields copied', copy?.widthMm, d.widthMm);
+  s.undo();
+  check('one undo removes the copy', s.decals.length, 1);
+  check('duplicating a missing decal is safe', s.duplicate('nope'), null);
+}
+
+section('removing an asset takes its decals with it');
+{
+  const { s, a } = store();
+  const b = s.addAsset({ name: 'other.svg', svgText: '<svg/>', mask: () => true, aspect: 2 });
+  place(s, a.id);
+  place(s, a.id);
+  place(s, b.id);
+  check('three placed', s.decals.length, 3);
+  check('two removed', s.removeByAsset(a.id), 2);
+  check('one survives', s.decals.length, 1);
+  check('asset gone from the library', s.assets.has(a.id), false);
+  check('the other asset stays', s.assets.has(b.id), true);
+  check('selection still valid', s.decals.some((d) => d.id === s.selectedId), true);
+  check('removing an unused asset is a no-op', s.removeByAsset('nope'), 0);
+}
+
+section('clearing');
+{
+  const { s, a } = store();
+  place(s, a.id);
+  place(s, a.id);
+  s.clear();
+  check('emptied', s.decals.length, 0);
+  check('selection cleared', s.selectedId, null);
+  s.undo();
+  check('clear is undoable', s.decals.length, 2);
 }
 
 section('history is bounded');

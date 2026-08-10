@@ -23,6 +23,24 @@ and a tool-changer.
 So: pick an STL, drop an SVG on it, position it, export a 3MF that opens in PrusaSlicer with the
 artwork already on toolhead 2 (or 3, 4, 5).
 
+## Two output modes
+
+**Parts** (default) extrudes each SVG into a thin prism and embeds it just under the model
+surface as a real volume. PrusaSlicer unions part volumes with their object and the part's
+extruder wins in the overlap, so you get flush colour with no bump — plus:
+
+- the decal appears in PrusaSlicer's object tree with its own toolhead dropdown
+- smart fill and bucket fill work on it, because it's geometry with real edges
+- colour depth is exactly the prism thickness, so "two layers deep" is something you set
+
+**Paint** writes per-triangle MMU segmentation and never touches the mesh. Nothing to
+repair, works on any surface however awkward, and costs no geometry — but it's only
+editable with the paint brush, doesn't appear as a part, and the slicer decides how far
+into the model the colour reaches.
+
+Rule of thumb: parts when you want to keep editing in the slicer, paint when you want the
+mesh left alone.
+
 ## How it works
 
 1. The SVG is rasterized to an alpha mask — the browser's own SVG renderer handles fill rules,
@@ -79,14 +97,19 @@ dependency).
 ## Using it
 
 1. Load an STL
-2. Load an SVG — use one with a transparent background; a white background becomes a painted region
-3. Click the model where you want it. The decal conforms to the surface as you place it
-4. **Drag it** on the model to reposition; adjust width, rotation and toolhead in the panel
-5. Add more SVGs and place as many decals as you like — each gets its own toolhead
+2. Add SVGs — they stay in a library for the session, so you can place any of them at any
+   time. Use transparent backgrounds; a white background becomes a painted region
+3. Click a thumbnail to arm it, then click the model to place a decal
+4. Position it: **drag** on the model, **arrow keys** to nudge by 0.01–5 mm, or the
+   **align** buttons to centre it on the face
+5. Set width, rotation and toolhead — sliders or type exact numbers
 6. Export, then open the 3MF in PrusaSlicer
 
-Ctrl+Z / Ctrl+Shift+Z undo and redo. Delete removes the selected decal. Overlapping decals
-resolve last-wins, matching the order in the list.
+**Copy to opposite face** stamps the same artwork on the far side, positioned to match,
+with the artwork flipped so it reads correctly from that side — coins, tokens, badges.
+
+Ctrl+Z / Ctrl+Shift+Z undo and redo; a whole drag is one undo step. Delete removes the
+selected decal. Overlapping paint-mode decals resolve last-wins.
 
 ### Two things that will confuse you if nobody warns you
 
@@ -124,15 +147,16 @@ fixtures. If a future PrusaSlicer changes the format, the tests fail immediately
 src/mmu/codec.ts       encode/decode, tree utilities, subdivision
 src/paint/stamp.ts     projector, footprint query, multi-decal painting
 src/paint/svgMask.ts   SVG rasterization and sampling
+src/paint/extrude.ts   SVG outlines to 3D prisms (part mode)
 src/app/decals.ts      decal model and undo history (no Three.js, no DOM)
 src/io/stl.ts          STL reader (binary + ASCII)
-src/io/threemf.ts      3MF writer
+src/io/threemf.ts      multi-volume 3MF writer
 src/main.ts            viewport, interaction, panel
 phase0/                Python validation scripts and 3MF generators
 ```
 
-The engine is deliberately separable from the app: `codec`, `stamp` and `decals` have no
-Three.js or DOM dependencies, which is why they're covered by 136 headless tests.
+The engine is deliberately separable from the app: `codec`, `stamp`, `decals` and `threemf`
+have no Three.js or DOM dependencies, which is why they're covered by 180 headless tests.
 
 `phase0/` holds the standalone Python tools used to reverse-engineer and verify the format.
 They're stdlib-only — `python3 phase0/test_codec.py` and `python3 phase0/make_toolhead_probe.py`

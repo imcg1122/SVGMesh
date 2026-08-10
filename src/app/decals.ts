@@ -35,6 +35,10 @@ export interface Decal {
   rollDeg: number;
   /** Toolhead this decal prints with. */
   state: number;
+  /** Prism depth in part mode. Ignored in paint mode. */
+  thicknessMm: number;
+  /** Flip the artwork horizontally — needed when stamping a mirrored face. */
+  mirrorX: boolean;
 }
 
 let counter = 0;
@@ -68,6 +72,31 @@ export class DecalStore {
     this.decals.push(decal);
     this.selectedId = decal.id;
     return decal;
+  }
+
+  /** Duplicate a decal, optionally overriding fields. Used by mirroring. */
+  duplicate(id: string, patch: Partial<Omit<Decal, 'id' | 'assetId'>> = {}): Decal | null {
+    const src = this.decals.find((d) => d.id === id);
+    if (!src) return null;
+    return this.add({ ...src, ...patch });
+  }
+
+  /** Remove every decal using an asset. Returns how many went. */
+  removeByAsset(assetId: string): number {
+    const doomed = this.decals.filter((d) => d.assetId === assetId);
+    if (doomed.length === 0) return 0;
+    this.commit();
+    this.decals = this.decals.filter((d) => d.assetId !== assetId);
+    this.assets.delete(assetId);
+    this.ensureSelectionValid();
+    return doomed.length;
+  }
+
+  clear(): void {
+    if (this.decals.length === 0) return;
+    this.commit();
+    this.decals = [];
+    this.selectedId = null;
   }
 
   remove(id: string): void {

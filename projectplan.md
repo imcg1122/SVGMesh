@@ -176,18 +176,21 @@ Mask resolution isn't the bottleneck — subdivision depth is.
 
 ## 7. Needs from Ian — current asks
 
-**① Try the new placement UX** (v0.3.0 — check the version in the panel corner).
+**① Test part mode** (v0.4.0 — check the version in the panel corner). This is the big one:
 
-- Place several decals, drag them around, undo a few things
-- Two decals on different toolheads, exported together
-- Does the surface-conforming preview match what PrusaSlicer shows?
+- Do decals appear as parts under the object in PrusaSlicer, with their own toolhead dropdown?
+- Do smart fill and bucket fill work on them?
+- Is the colour depth now what you set (0.6mm default) rather than too deep?
+- Does the surface stay flush — no bump where the decal sits?
 
-**② Print one.** Everything from here is preview-versus-reality. A single printed token at
-0.2mm Detail tells us more than any screenshot.
+**② Test "Copy to opposite face"** on a hexagon token. Does the artwork read correctly from
+the back, or does it need the flip toggle turned off? I guessed at the handedness.
 
-**③ What's still missing?** Remaining known gaps: no scale handles on the decal itself
-(sliders only), no rotate-by-dragging, no copy/paste, no snapping, no cylindrical
-projection yet.
+**③ Print one.** Everything from here is preview-versus-reality.
+
+**④ Remaining known gaps:** no scale/rotate handles on the decal itself (sliders and typed
+values only), no copy/paste, no snapping to model features, no cylindrical projection,
+per-decal thickness is set from the global field at placement time rather than edited later.
 
 ### Received ✅
 
@@ -260,6 +263,60 @@ PrusaSlicer's own tool falls over.
 ---
 
 ## 11. Changelog
+
+### 2026-08-10 — Phase 2b: part mode, precision placement, asset library
+
+Ian's first substantive UX review. Two items were architectural, the rest mechanical.
+
+**The architectural finding: paint alone isn't enough.** Ian wanted to select decals with
+PrusaSlicer's smart fill / bucket fill and reassign toolheads from the object tree. Neither
+is possible with MMU paint, and not because of a bug: smart fill walks connected facets
+bounded by sharp edges, and painted regions have no edges — they're per-triangle metadata,
+not geometry. Same reason they never appear as parts.
+
+He also reported colour reaching too deep in the sliced result, which paint mode can't
+control: the slicer decides how far segmentation propagates inward.
+
+**Both are solved by the same change — a second output mode.** `parts` extrudes each SVG
+into a prism (SVGLoader → shapes → ExtrudeGeometry, so fill rules and holes are handled)
+and embeds it just under the surface, top face 0.01mm proud to avoid coplanar ambiguity.
+PrusaSlicer unions part volumes with their object and the part's extruder wins in the
+overlap, giving flush colour, an entry in the object tree with a toolhead dropdown, working
+smart fill, and colour depth equal to the prism thickness — configurable, default 0.6mm.
+
+Paint mode is kept and remains the better answer for awkward surfaces and for leaving the
+mesh untouched. Mode is chosen at export.
+
+**3MF writer rewritten for multiple volumes.** PrusaSlicer represents a multi-part object
+as one merged mesh plus `firstid`/`lastid` spans in `Slic3r_PE_model.config`. An off-by-one
+there silently assigns the wrong toolhead to the wrong geometry, so 27 tests now cover span
+tiling, empty-volume skipping, cross-volume vertex welding, paint attributes and XML
+escaping.
+
+**Placement precision:**
+- Arrow-key nudge with selectable step (0.01 / 0.1 / 1 / 5 mm), re-projected onto the
+  surface after each move so the decal stays stuck to curved geometry
+- Align buttons — centre, h-centre, left, right, top, bottom — computed against the model's
+  bounding box as seen from the decal's own viewing direction, so "centre" on a token face
+  means the centre of the token
+- **Copy to opposite face**: raycasts straight through to the far surface and duplicates
+  there with the artwork flipped, for coins and two-sided tokens
+- Manual flip-horizontally toggle
+
+**Library and inputs:**
+- SVG library persists for the session with thumbnails; arm any asset and place it
+- Multi-file SVG import; assets removable (taking their decals with them)
+- Model removable and replaceable; replacing clears decals, undoably, since positions are
+  model coordinates
+- Type-in numeric fields alongside every slider
+- New decals inherit the last width and toolhead instead of resetting
+- **Removed the toolhead auto-cycling** — Ian wants to assign them himself
+
+**Preview fix:** decals are textured with a white silhouette rather than the raw artwork.
+Tinting multiplies into the texture, so a black logo previewed black regardless of toolhead.
+
+180 tests, typecheck clean.
+
 
 ### 2026-08-10 — Phase 2a: placement UX
 

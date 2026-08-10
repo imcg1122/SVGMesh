@@ -14,7 +14,17 @@ export interface SvgMask {
   mask: Mask;
   /** width / height of the source artwork, for non-distorting placement. */
   aspect: number;
+  /** The artwork as drawn, for library thumbnails. */
   preview: HTMLCanvasElement;
+  /**
+   * Solid white wherever the artwork is filled, transparent elsewhere.
+   *
+   * The 3D preview tints decals by toolhead colour, and a texture multiplies
+   * into that tint — so drawing the original artwork would turn a black logo
+   * black regardless of the toolhead. A white silhouette multiplies cleanly and
+   * shows the actual print colour.
+   */
+  silhouette: HTMLCanvasElement;
 }
 
 export interface RasterizeOptions {
@@ -52,7 +62,31 @@ export async function rasterizeSvg(svgText: string, opts: RasterizeOptions = {})
     return invert ? !filled : filled;
   };
 
-  return { mask, aspect, preview: canvas };
+  return { mask, aspect, preview: canvas, silhouette: buildSilhouette(data, w, h, alphaThreshold, invert) };
+}
+
+function buildSilhouette(
+  src: Uint8ClampedArray,
+  w: number,
+  h: number,
+  alphaThreshold: number,
+  invert: boolean,
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  const out = ctx.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    const filled = src[i * 4 + 3] >= alphaThreshold;
+    const on = invert ? !filled : filled;
+    out.data[i * 4] = 255;
+    out.data[i * 4 + 1] = 255;
+    out.data[i * 4 + 2] = 255;
+    out.data[i * 4 + 3] = on ? 255 : 0;
+  }
+  ctx.putImageData(out, 0, 0);
+  return canvas;
 }
 
 /** viewBox is the reliable source of aspect; width/height attrs are optional. */

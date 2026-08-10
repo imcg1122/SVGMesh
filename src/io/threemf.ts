@@ -1,9 +1,18 @@
 /**
- * 3MF writer producing PrusaSlicer-compatible painted files.
+ * 3MF writer producing PrusaSlicer-compatible files, in either output mode.
  *
- * A 3MF is a zip. PrusaSlicer reads paint data from the `slic3rpe:mmu_segmentation`
- * attribute on triangles in `3D/3dmodel.model`, and per-volume extruder assignment
- * from `Metadata/Slic3r_PE_model.config`.
+ * PrusaSlicer represents a multi-part object as ONE merged mesh plus a config
+ * file that carves it into volumes by triangle index range. So a model with
+ * three decal parts is a single `<object>` whose triangles are the model's
+ * followed by each decal's, with `Slic3r_PE_model.config` declaring
+ * `firstid`/`lastid` spans and a per-volume extruder.
+ *
+ * That's what makes parts appear in PrusaSlicer's object tree with their own
+ * toolhead dropdown, and what lets smart fill and bucket fill work on them —
+ * they're real geometry, not per-triangle metadata.
+ *
+ * Paint mode instead emits a single volume carrying `slic3rpe:mmu_segmentation`
+ * attributes. Both can be combined in one file.
  */
 
 import { zipSync, strToU8 } from 'fflate';
@@ -20,24 +29,36 @@ const RELS = `<?xml version="1.0" encoding="UTF-8"?>
  <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
 </Relationships>`;
 
-export interface Write3mfOptions {
+export interface Volume {
+  name: string;
   tris: Tri[];
-  /** One segmentation string per triangle; '' or undefined means unpainted. */
-  segments: (string | undefined)[];
-  /** Extruder the unpainted body prints with. */
-  baseExtruder?: number;
+  /** Toolhead this volume prints with. */
+  extruder: number;
+  /** Optional per-triangle MMU paint, index-aligned with `tris`. */
+  segments?: (string | undefined)[];
+}
+
+export interface Write3mfOptions {
+  volumes: Volume[];
   objectName?: string;
 }
 
-/** Weld duplicate vertices. STL is triangle soup; 3MF wants an indexed mesh. */
-function weld(tris: Tri[]): { verts: Vec3[]; faces: [number, number, number][] } {
+const esc = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const fmt = (n: number) => n.toFixed(6);
+
+export function build3mf(opts: Write3mfOptions): Uint8Array {
+  const { volumes, objectName = 'SVGMesh model' } = opts;
+  if (volumes.length === 0) throw new Error('a 3MF needs at least one volume');
+
+  // Weld across the whole merged mesh. STL is triangle soup and 3MF wants an
+  // indexed mesh; 6dp is well below printable resolution and stops float noise
+  // splitting seams.
   const index = new Map<string, number>();
   const verts: Vec3[] = [];
-  const faces: [number, number, number][] = [];
-
-  const id = (p: Vec3): number => {
-    // 6dp is well below printable resolution and avoids float noise splitting seams.
-    const k = `${p[0].toFixed(6)},${p[1].toFixed(6)},${p[2].toFixed(6)}`;
+  const vid = (p: Vec3): number => {
+    const k = `${fmt(p[0])},${fmt(p[1])},${fmt(p[2])}`;
     let i = index.get(k);
     if (i === undefined) {
       i = verts.length;
@@ -47,28 +68,23 @@ function weld(tris: Tri[]): { verts: Vec3[]; faces: [number, number, number][] }
     return i;
   };
 
-  for (const t of tris) faces.push([id(t[0]), id(t[1]), id(t[2])]);
-  return { verts, faces };
-}
+  const triLines: string[] = [];
+  const spans: { first: number; last: number; v: Volume }[] = [];
 
-const esc = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-export function build3mf(opts: Write3mfOptions): Uint8Array {
-  const { tris, segments, baseExtruder = 1, objectName = 'SVGMesh model' } = opts;
-  const { verts, faces } = weld(tris);
-
-  const vertXml = verts
-    .map((v) => `   <vertex x="${v[0].toFixed(6)}" y="${v[1].toFixed(6)}" z="${v[2].toFixed(6)}"/>`)
-    .join('\n');
-
-  const triXml = faces
-    .map((f, i) => {
-      const seg = segments[i];
+  for (const v of volumes) {
+    if (v.tris.length === 0) continue;
+    const first = triLines.length;
+    v.tris.forEach((t, i) => {
+      const seg = v.segments?.[i];
       const paint = seg ? ` slic3rpe:mmu_segmentation="${seg}"` : '';
-      return `   <triangle v1="${f[0]}" v2="${f[1]}" v3="${f[2]}"${paint}/>`;
-    })
-    .join('\n');
+      triLines.push(
+        `   <triangle v1="${vid(t[0])}" v2="${vid(t[1])}" v3="${vid(t[2])}"${paint}/>`,
+      );
+    });
+    spans.push({ first, last: triLines.length - 1, v });
+  }
+
+  const vertLines = verts.map((v) => `   <vertex x="${fmt(v[0])}" y="${fmt(v[1])}" z="${fmt(v[2])}"/>`);
 
   const model = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xml:lang="en-US"
@@ -81,10 +97,10 @@ export function build3mf(opts: Write3mfOptions): Uint8Array {
   <object id="1" type="model">
    <mesh>
     <vertices>
-${vertXml}
+${vertLines.join('\n')}
     </vertices>
     <triangles>
-${triXml}
+${triLines.join('\n')}
     </triangles>
    </mesh>
   </object>
@@ -94,16 +110,22 @@ ${triXml}
  </build>
 </model>`;
 
+  const volumeXml = spans
+    .map(
+      ({ first, last, v }) => `  <volume firstid="${first}" lastid="${last}">
+   <metadata type="volume" key="name" value="${esc(v.name)}"/>
+   <metadata type="volume" key="volume_type" value="ModelPart"/>
+   <metadata type="volume" key="extruder" value="${v.extruder}"/>
+   <mesh edges_fixed="0" degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>
+  </volume>`,
+    )
+    .join('\n');
+
   const config = `<?xml version="1.0" encoding="UTF-8"?>
 <config>
  <object id="1" instances_count="1">
   <metadata type="object" key="name" value="${esc(objectName)}"/>
-  <volume firstid="0" lastid="${faces.length - 1}">
-   <metadata type="volume" key="name" value="${esc(objectName)}"/>
-   <metadata type="volume" key="volume_type" value="ModelPart"/>
-   <metadata type="volume" key="extruder" value="${baseExtruder}"/>
-   <mesh edges_fixed="0" degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>
-  </volume>
+${volumeXml}
  </object>
 </config>`;
 
@@ -119,7 +141,9 @@ ${triXml}
 }
 
 export function downloadBlob(data: Uint8Array, filename: string): void {
-  const blob = new Blob([data as BlobPart], { type: 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml' });
+  const blob = new Blob([data as BlobPart], {
+    type: 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml',
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
