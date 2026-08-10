@@ -264,6 +264,25 @@ PrusaSlicer's own tool falls over.
 
 ## 11. Changelog
 
+### 2026-08-10 — v0.4.1: "no opposite face found" fixed
+
+"Copy to opposite face" failed on the hexagon token. Cause: **Three.js culls raycast hits
+by `material.side`**, and the model material was `FrontSide`. The ray for this feature
+starts *inside* the model and travels outward, so it strikes the far face from behind — a
+back face — and gets discarded. Zero intersections, hence the message.
+
+Fix: the model material is now `DoubleSide`. That's not a rendering preference, it's a
+correctness requirement for any ray cast from inside the mesh, and it also rescues STLs
+with inconsistent winding.
+
+Also made exit selection principled: pick the first hit whose face normal points *along*
+the ray (a genuine exit) rather than simply the last hit, which lands somewhere unrelated
+on models with internal structure.
+
+Verified against the real token: `FrontSide` → 0 hits; `DoubleSide` → exit at z=0.001 with
+normal (0,0,-1), the bottom face.
+
+
 ### 2026-08-10 — Phase 2b: part mode, precision placement, asset library
 
 Ian's first substantive UX review. Two items were architectural, the rest mechanical.
