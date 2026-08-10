@@ -74,14 +74,24 @@ export function build3mf(opts: Write3mfOptions): Uint8Array {
   for (const v of volumes) {
     if (v.tris.length === 0) continue;
     const first = triLines.length;
+
     v.tris.forEach((t, i) => {
+      const a = vid(t[0]);
+      const b = vid(t[1]);
+      const c = vid(t[2]);
+
+      // A triangle whose corners weld together has no area and no meaning, but
+      // it does leave the mesh reporting open edges — which makes PrusaSlicer
+      // demand a repair, and repairing rebuilds the mesh and destroys paint.
+      // Cheap backstop: whatever the source, they never reach the file.
+      if (a === b || b === c || c === a) return;
+
       const seg = v.segments?.[i];
       const paint = seg ? ` slic3rpe:mmu_segmentation="${seg}"` : '';
-      triLines.push(
-        `   <triangle v1="${vid(t[0])}" v2="${vid(t[1])}" v3="${vid(t[2])}"${paint}/>`,
-      );
+      triLines.push(`   <triangle v1="${a}" v2="${b}" v3="${c}"${paint}/>`);
     });
-    spans.push({ first, last: triLines.length - 1, v });
+
+    if (triLines.length > first) spans.push({ first, last: triLines.length - 1, v });
   }
 
   const vertLines = verts.map((v) => `   <vertex x="${fmt(v[0])}" y="${fmt(v[1])}" z="${fmt(v[2])}"/>`);

@@ -34,6 +34,26 @@ export interface ExtrudeOptions {
   mirrorX?: boolean;
 }
 
+/**
+ * Would this triangle collapse once vertices are welded?
+ *
+ * Closed curves duplicate their start point at the seam, and ExtrudeGeometry
+ * dutifully emits a zero-width quad there. Those triangles have no area, carry
+ * no information, and — because two of their corners weld into one — leave the
+ * mesh reporting open edges. PrusaSlicer then demands a repair, which rebuilds
+ * the mesh and discards paint. So they're dropped at source.
+ *
+ * The comparison rounds to the same 6 decimal places the 3MF writer welds at,
+ * so a triangle judged fine here can't collapse later.
+ */
+function isDegenerate(a: Vec3, b: Vec3, c: Vec3): boolean {
+  const k = (p: Vec3) => `${p[0].toFixed(6)},${p[1].toFixed(6)},${p[2].toFixed(6)}`;
+  const ka = k(a);
+  const kb = k(b);
+  const kc = k(c);
+  return ka === kb || kb === kc || kc === ka;
+}
+
 /** Cache parsed shapes — re-parsing an SVG on every slider tick is wasteful. */
 const shapeCache = new Map<string, THREE.Shape[]>();
 
@@ -130,11 +150,11 @@ export function extrudeShapes(shapes: THREE.Shape[], opts: ExtrudeOptions): Tri[
 
   const tris: Tri[] = [];
   for (let i = 0; i < pos.count; i += 3) {
-    tris.push([
-      [pos.getX(i), pos.getY(i), pos.getZ(i)],
-      [pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1)],
-      [pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2)],
-    ]);
+    const a: Vec3 = [pos.getX(i), pos.getY(i), pos.getZ(i)];
+    const b: Vec3 = [pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1)];
+    const c: Vec3 = [pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2)];
+    if (isDegenerate(a, b, c)) continue;
+    tris.push([a, b, c]);
   }
 
   geom.dispose();

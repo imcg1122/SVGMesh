@@ -88,13 +88,21 @@ export class DecalStore {
     return this.add({ ...src, ...patch });
   }
 
-  /** Remove every decal using an asset. Returns how many went. */
+  /**
+   * Remove an asset from the library along with any decals using it.
+   * Returns how many decals went.
+   *
+   * The asset is dropped whether or not anything was placed from it — an
+   * earlier version bailed out early when the count was zero and left the
+   * asset stranded in the library.
+   */
   removeByAsset(assetId: string): number {
     const doomed = this.decals.filter((d) => d.assetId === assetId);
+    this.assets.delete(assetId);
     if (doomed.length === 0) return 0;
+
     this.commit();
     this.decals = this.decals.filter((d) => d.assetId !== assetId);
-    this.assets.delete(assetId);
     this.ensureSelectionValid();
     return doomed.length;
   }

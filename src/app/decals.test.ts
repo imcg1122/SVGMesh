@@ -152,7 +152,19 @@ section('removing an asset takes its decals with it');
   check('asset gone from the library', s.assets.has(a.id), false);
   check('the other asset stays', s.assets.has(b.id), true);
   check('selection still valid', s.decals.some((d) => d.id === s.selectedId), true);
-  check('removing an unused asset is a no-op', s.removeByAsset('nope'), 0);
+  check('removing an unknown asset reports nothing removed', s.removeByAsset('nope'), 0);
+}
+
+section('an unplaced asset can still be removed from the library');
+{
+  // Regression: an early return when no decals used the asset left it stranded
+  // in the library with its thumbnail already discarded, showing as a broken
+  // image. Deleting from the library must not depend on anything being placed.
+  const { s, a } = store();
+  check('nothing placed', s.decals.length, 0);
+  check('no decals reported removed', s.removeByAsset(a.id), 0);
+  check('but the asset is gone', s.assets.has(a.id), false);
+  check('and the library is empty', s.assets.size, 0);
 }
 
 section('clearing');

@@ -270,6 +270,39 @@ PrusaSlicer's own tool falls over.
 
 ## 11. Changelog
 
+### 2026-08-10 — v0.5.1: open edges in part mode; stranded library assets
+
+**Open edges were back, on a dice STL — and this time in part mode, not paint mode.**
+
+Measured first, as usual. The dice STL is flawless: 22,556 triangles, 0 open edges at every
+rounding tolerance, no degenerate or duplicate faces. Paint mode output on it: also 0 open
+edges. So the fault was in the decal prisms.
+
+**Cause: degenerate triangles at curve seams.** A closed curve duplicates its start point,
+and `ExtrudeGeometry` dutifully emits a zero-width quad there. Those triangles have no area
+and no meaning, but two of their corners weld into one, which reports as an open edge —
+and then PrusaSlicer demands a repair, and the repair destroys the paint. Excluding them,
+every prism was already perfectly watertight, all edges used exactly twice.
+
+Why the token never showed it: its icon happened not to exercise the seam case the same
+way. A ring built from `absarc` produced 4 degenerate triangles and 6 open edges; from
+explicit points, none. So this was always latent for curved artwork.
+
+Fixed in two places: `extrudeShapes` drops them as it builds, comparing at the same 6
+decimal places the writer welds at, so nothing judged fine can collapse later; and
+`build3mf` skips them for any volume from any source, as a backstop. Spans and paint
+alignment are preserved. Verified: a ring from arcs and a three-ring icon now both come out
+0 degenerate, 0 open.
+
+**Removing an unplaced SVG left a broken thumbnail.** `removeByAsset` returned early when
+no decals used the asset — before deleting the asset itself — while the UI had already
+discarded its thumbnail. The asset stayed in the library rendering as a broken image.
+Deleting from the library no longer depends on anything being placed, and the grid renders
+nothing rather than an empty `<img>` if a thumbnail is ever missing.
+
+227 → 236 tests.
+
+
 ### 2026-08-10 — v0.5.0: text tool (Phase 3)
 
 Ian chose the text tool for Phase 3.

@@ -125,6 +125,52 @@ section('empty volumes are skipped, not mis-indexed');
   check('the empty volume contributes no extruder', extruders(config), [1, 2]);
 }
 
+section('degenerate triangles are dropped');
+{
+  // A triangle whose corners weld together has no area, but it does make the
+  // mesh report open edges — which makes PrusaSlicer demand a repair, and the
+  // repair rebuilds the mesh and destroys the paint. Curve seams produce these
+  // routinely, so the writer must never emit one.
+  const p: Vec3 = [0, 0, 0];
+  const solid = box(0, 0, 0, 10);
+  const withJunk: Tri[] = [
+    solid[0],
+    [p, p, [1, 0, 0]], // two corners identical
+    solid[1],
+    [[2, 0, 0], [2, 0, 0], [2, 0, 0]], // all three identical
+    ...solid.slice(2),
+  ];
+
+  const { model, config } = read(build3mf({ volumes: [{ name: 'm', tris: withJunk, extruder: 1 }] }));
+  check('only the real triangles survive', (model.match(/<triangle /g) ?? []).length, 12);
+  check('the span covers what was actually written', spans(config), [[0, 11]]);
+}
+
+section('dropping degenerates keeps paint aligned');
+{
+  const solid = box(0, 0, 0, 10);
+  const tris: Tri[] = [solid[0], [[0, 0, 0], [0, 0, 0], [1, 0, 0]], solid[1]];
+  const segments = ['4', '48403', '8']; // the middle one belongs to the junk triangle
+  const { model } = read(build3mf({ volumes: [{ name: 'm', tris, extruder: 1, segments }] }));
+  const painted = [...model.matchAll(/mmu_segmentation="([^"]+)"/g)].map((m) => m[1]);
+  check('surviving triangles keep their own paint', painted, ['4', '8']);
+}
+
+section('a volume of nothing but degenerates gets no span');
+{
+  const { config } = read(
+    build3mf({
+      volumes: [
+        { name: 'model', tris: box(0, 0, 0, 10), extruder: 1 },
+        { name: 'junk', tris: [[[1, 1, 1], [1, 1, 1], [1, 1, 1]]], extruder: 3 },
+        { name: 'decal', tris: box(1, 1, 9, 2), extruder: 2 },
+      ],
+    }),
+  );
+  check('two spans, still contiguous', spans(config), [[0, 11], [12, 23]]);
+  check('the junk volume contributes no extruder', extruders(config), [1, 2]);
+}
+
 section('paint segments ride along on the right triangles');
 {
   const tris = box(0, 0, 0, 10);

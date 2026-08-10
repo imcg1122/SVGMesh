@@ -33,7 +33,7 @@ import { DecalStore, type Decal } from './app/decals.ts';
 import { watchForNewBuild } from './app/updateCheck.ts';
 
 /** Shown in the panel and written into export filenames. Bump on behaviour changes. */
-export const BUILD = 'v0.5.0';
+export const BUILD = 'v0.5.1';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
@@ -267,9 +267,12 @@ function renderAssets(): void {
     cell.className = 'asset' + (asset.id === activeAssetId ? ' active' : '');
     cell.title = asset.name;
 
-    const img = document.createElement('img');
-    img.src = thumbs.get(asset.id) ?? '';
-    cell.append(img);
+    const thumb = thumbs.get(asset.id);
+    if (thumb) {
+      const img = document.createElement('img');
+      img.src = thumb;
+      cell.append(img);
+    }
 
     const x = document.createElement('button');
     x.className = 'x';
