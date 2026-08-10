@@ -17,8 +17,9 @@
 | **Phase 0** | ✅ **CLOSED.** Format fully validated in both directions. |
 | **Decoder** | ✅ 30/30 real PrusaSlicer 2.9.6 triangles parse and re-encode byte-for-byte |
 | **Encoder** | ✅ Accepted by PrusaSlicer. **Mapping confirmed direct: state N → extruder N.** No bug — the original confusion was five identically-coloured filaments. |
-| **Repo** | Initialized and committed locally. 23 files, 96 tests passing. **Not yet pushed** — needs Ian's credentials (§7). |
-| **Blocked on** | Ian to push, then run the MVP against the hexagon token + cutlery icon |
+| **Repo** | ✅ Pushed. https://github.com/imcg1122/SVGMesh — public, CI green, 96 tests passing |
+| **Live app** | ✅ https://imcg1122.github.io/SVGMesh/ — auto-deploys from `main` |
+| **Blocked on** | Ian to run the real-world test: cutlery icon on the hexagon token (§7) |
 
 ---
 
@@ -174,31 +175,27 @@ Mask resolution isn't the bottleneck — subdivision depth is.
 
 ## 7. Needs from Ian — current asks
 
-**① Push the repo.** It's committed locally with the remote already set, but the sandbox
-has no GitHub credentials so the push has to come from Ian's machine:
+**① The crispness test — the last unretired risk.** Open https://imcg1122.github.io/SVGMesh/
+(or `npm run dev`), load `blank small hexagon token.stl` and `food-restaurant-icon.svg`,
+click the token's **top face**, set width ~15mm, decal toolhead 2, export, open in
+PrusaSlicer.
 
-```
-cd "<this folder>"
-git push -u origin main
-```
+The token is only 2mm tall, so the icon has to go on the top face — the sides have almost
+no area.
 
-**② Run the MVP** and report what it does with the real assets:
+Run it at **each of the four Detail settings** and report:
 
-```
-npm install
-npm run dev
-```
+- Do the cutlery icon's thin strokes survive, or break up / stair-step?
+- Which setting is the first one that looks acceptable?
+- Export time and resulting file size at each
+- Does the sliced preview put the icon on toolhead 2 cleanly?
 
-Load `blank small hexagon token.stl`, load `food-restaurant-icon.svg`, click the token's
-top face, set width ~15mm, decal toolhead 2, export, open in PrusaSlicer.
+This determines whether pre-subdivision + quadtree is good enough, or whether we need
+partial (2/3-way) splits to clean up boundaries — see Risk 2.
 
-The interesting question is **edge quality on the cutlery icon's thin strokes** at each
-Detail setting. That's the last unretired risk. Note the token is only 2mm tall, so the
-icon has to land on the top face — a side face has almost no area.
-
-**③ Enable GitHub Pages** once pushed: repo Settings → Pages → Source: GitHub Actions. The
-workflow in `.github/workflows/deploy.yml` runs tests, then builds and deploys on every
-push to `main`. `vite.config.ts` has `base: '/SVGMesh/'` to match the repo name.
+**② UX friction.** First contact with the placement UI. What's missing or annoying? Known
+gaps: no drag-to-move after placing (you re-click), no live paint preview (the quad is an
+approximation until export), no undo.
 
 ### Received ✅
 
@@ -263,6 +260,28 @@ PrusaSlicer's own tool falls over.
 ---
 
 ## 11. Changelog
+
+### 2026-08-10 — Shipped. Repo public, CI green, app live
+
+- **Pushed to https://github.com/imcg1122/SVGMesh** and deployed to
+  **https://imcg1122.github.io/SVGMesh/** via GitHub Actions.
+- **CI debugging.** First run failed in 12s. Diagnosed through GitHub's public REST API
+  (`/actions/jobs/<id>` gives per-step conclusions without auth — useful trick, the Chrome
+  extension wasn't connected). `npm ci` and all 96 tests passed on the runner; only
+  `tsc --noEmit` failed, with 5 errors:
+  - `process.env` in `vite.config.ts` without `@types/node` → removed the env lookup
+  - hand-written `three-mesh-bvh` module augmentation collided with the library's own →
+    deleted the `.d.ts` and cast at the patch site instead, which survives version drift
+  - `process.exit()` in the two test files → added `@types/node`
+- **Build no longer runs `tsc`.** Vite strips types with esbuild and never type-checks, so
+  gating the build on tsc bought nothing; the `test` job owns typechecking and blocks
+  deployment on it.
+- **Windows setup notes** (worth keeping for future machines): PowerShell blocks `npm.ps1`
+  under the default `Restricted` execution policy — fix with
+  `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`. Git is unaffected
+  since it's a real `.exe`.
+- **Repo description set** by Ian: "Allows for easily adding in SVG stamps to STL files for
+  multi color prints in prusaslicer".
 
 ### 2026-08-09 — Phase 0 closed; repo scaffolded; MVP built
 
